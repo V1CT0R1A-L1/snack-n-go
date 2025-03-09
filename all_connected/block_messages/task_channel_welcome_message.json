@@ -1,0 +1,11 @@
+{
+	"blocks": [
+		{
+			"type": "section",
+			"text": {
+				"type": "mrkdwn",
+				"text": "This is task_channel_welcome_message.json. "
+			}
+		}
+	]
+}
