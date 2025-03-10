@@ -47,11 +47,11 @@ EMOJI_DICT = {0: '🪴',
 # with open('block_messages/help_block.json', 'r') as infile:
 #     info_page = json.load(infile)
 
-with open('block_messages/sample_task.json', 'r') as infile:
+with open('block_messages/sample_task.json', 'r') as infile: # TODO: renew sample task
     sample_task = json.load(infile)
 
-with open('block_messages/onboarding_block.json', 'r') as infile:
-    onboarding = json.load(infile)
+# with open('block_messages/onboarding_block.json', 'r') as infile:
+#     onboarding = json.load(infile)
 
 with open('block_messages/headers.json', 'r') as infile:
     block_headers = json.load(infile)
@@ -106,7 +106,6 @@ def send_welcome_message(users_list) -> None:
     #         except SlackApiError as e:
     #             assert e.response["ok"] is False and e.response["error"], f"Got an error: {e.response['error']}"
 
-
 def create_task_channel(user_id, task_id):
     """
     Helper function for handle_begin_task() in bot.py
@@ -152,6 +151,15 @@ def get_all_users_info() -> dict:
     
     return users_store
 
+def create_order_task(user_id):
+    """
+    Create a new order upload task in the database.
+    Return a task_id corresponding to the task_id in the database. 
+    # TODO: Implementation when database ready
+    """
+    task_id = int(datetime.now().timestamp()) # WARNING: This is temproary!! # TODO: revise when database ready
+    return task_id
+
 ### ### MESSAGE HANDLERS ### ###
 @app.message()
 def handle_message(payload, say):
@@ -167,79 +175,61 @@ def handle_message(payload, say):
 
     print("- Message sent", user_id, text, datetime.now())
     # Handle certain responses
-    # if BOT_ID != user_id:
-    #     if 'files' not in payload:
-    #         if text.strip() == "?" or text.strip().lower() == 'help':
-    #             say(info_page)
-    #         User only sends text without attaching an image
-    #         elif text.strip().lower() == "account":
-    #             send_messages(user_id, generate_account_summary_block(user_id), "") 
-    #         elif text.strip().lower() == "report":
-    #             active_block = make_report_block(user_id) 
-    #             end_block = [block_headers['divider'], block_headers['ending_block']]
-    #             client.chat_postMessage(channel=f"@{user_id}", blocks = active_block,text="")
+    if BOT_ID != user_id:
+        if 'files' not in payload:
+            """
+            User sends a text without any image
+            """
+            # User needs help
+            if text.strip() == "?" or text.strip().lower() == 'help': # TODO: make a help thing later, check original code for reference
+                say("im too lazy to help")
+            # User want account summary
+            elif text.strip().lower() == "account": # TODO: make an account summary, check original code for reference
+                say("im too lazy to give any account info")
+            elif text.strip().lower() == "report": # TODO: make report avialable, check original code for reference
+                say("don't report")
+            else:
+                say(sample_task)
+        else:
+            # User attaches more than one image
+            print("text+file", datetime.now())
+            print(payload)
+            if len(payload['files']) > 1: 
+                say("*:large_orange_circle: You are attaching more than one file.* Reply `?` for more information.")
+                return
 
-    #              # Sort pending tasks by start time
-    #             pending_ids = messenger.get_pending_tasks(user_id)
-    #             all_pending = [messenger.get_task_list(user_id, task_id) for task_id in pending_ids]
-    #             sorted_pending = sorted(all_pending, key=lambda task_list: task_list[4])
-    #             for task_list in sorted_pending:
-    #                 pending_task = compact_task(task_list) 
-    #                 buttons = copy.deepcopy(default_btn)
-    #                 buttons['block_id'] = str(task_list[0])
-    #                 blocks = [pending_task, buttons]
-
-    #                 client.chat_postMessage(channel=f"@{user_id}", blocks = blocks, text="")
-
-    #             client.chat_postMessage(channel=f"@{user_id}", blocks = end_block,text="")
-    #         elif text.strip().lower() == "opt in":
-    #             messenger.update_account_status(user_id, "active")
-    #             say("You have opted in for the day.")
-    #         elif text.strip().lower() == "opt out":
-    #             messenger.update_account_status(user_id, "inactive")
-    #             say("You have opted out for the day.")
-    #         else:
-    #             say(sample_task)
-    #     else:
-    #         # User attaches more than one image
-    #         print("text+file", datetime.now())
-    #         print(payload)
-    #         if len(payload['files']) > 1: 
-    #             say("*:large_orange_circle: You are attaching more than one file.* Reply `?` for more information.")
-    #             return
-
-    #         # User attaches a file that is not an image
-    #         file = payload['files'][0]
-    #         if "image" not in file['mimetype']: 
-    #             say("*:large_orange_circle: The file you attached is not an image.*\n Reply `?` for more information.")
-    #             return
-    #         task_id = payload['blocks'][0]['elements'][0]['elements'][0]['text']
-    #         print("TASK ID:", task_id)
-    #         if not task_id.isdigit():
-    #             say(":large_orange_circle: Please include *only the task number* in the text & attach that tasks's image.")
-    #             return
-    #         task_id = int(task_id)
-    #         accepted_tasks = messenger.get_accepted_tasks(user_id)
-    #         pending_tasks = messenger.get_pending_tasks(user_id)
-    #         # The text the user enters isn't any of their assigned task numbers
-    #         if messenger.check_time_window(task_id) == "expired":
-    #             say(f''':large_orange_circle: Task {task_id} has already expired. Please pick another assigned task to finish.''')
-    #         elif messenger.check_time_window(task_id) == "not started":
-    #             say(f''':large_orange_circle: Task {task_id} has not started yet. Please check the start time & time window and finish this task later.''')
-    #         elif task_id not in accepted_tasks: 
-    #             say(f":large_orange_circle: Task {task_id} is not one of your unfinished, accepted tasks. Your unfinished, accepted tasks are {accepted_tasks}")
-    #             if task_id in pending_tasks:
-    #                 say(f'''However, task {task_id} is one of your pending tasks. You can still complete the task by pressing the Accept button for task {task_id} and then submit your picture.''')
-    #             return
-    #         else:
-    #             print("submitted")
-    #             url = file['url_private_download']
-    #             path = get_pic(url, os.environ['TASK_BOT_TOKEN'], user_id, task_id)
-    #             if messenger.submit_task(user_id, task_id, path):
-    #                 messenger.update_reliability(user_id)
-    #                 say(f"We received your submission to task {task_id}. Your compensation will be secured once we checked your submission. Reply `account` for more information on your account and completed tasks.")
-    #         #update database if image is NULL
-    #     return #needs to be changed
+            # User attaches a file that is not an image
+            file = payload['files'][0]
+            if "image" not in file['mimetype']: 
+                say("*:large_orange_circle: The file you attached is not an image.*\n Reply `?` for more information.")
+                return
+            task_id = payload['blocks'][0]['elements'][0]['elements'][0]['text']
+            print("TASK ID:", task_id)
+            if not task_id.isdigit():
+                say(":large_orange_circle: Please include *only the task number* in the text & attach that tasks's image.")
+                return
+            task_id = int(task_id)
+            accepted_tasks = messenger.get_accepted_tasks(user_id)
+            pending_tasks = messenger.get_pending_tasks(user_id)
+            # The text the user enters isn't any of their assigned task numbers
+            if messenger.check_time_window(task_id) == "expired":
+                say(f''':large_orange_circle: Task {task_id} has already expired. Please pick another assigned task to finish.''')
+            elif messenger.check_time_window(task_id) == "not started":
+                say(f''':large_orange_circle: Task {task_id} has not started yet. Please check the start time & time window and finish this task later.''')
+            elif task_id not in accepted_tasks: 
+                say(f":large_orange_circle: Task {task_id} is not one of your unfinished, accepted tasks. Your unfinished, accepted tasks are {accepted_tasks}")
+                if task_id in pending_tasks:
+                    say(f'''However, task {task_id} is one of your pending tasks. You can still complete the task by pressing the Accept button for task {task_id} and then submit your picture.''')
+                return
+            else:
+                print("submitted")
+                url = file['url_private_download']
+                path = get_pic(url, os.environ['TASK_BOT_TOKEN'], user_id, task_id)
+                if messenger.submit_task(user_id, task_id, path):
+                    messenger.update_reliability(user_id)
+                    say(f"We received your submission to task {task_id}. Your compensation will be secured once we checked your submission. Reply `account` for more information on your account and completed tasks.")
+            #update database if image is NULL
+        return #needs to be changed
 
 ### ### INTERACTION HANDLERS ### ###
 @app.event("message")
@@ -285,7 +275,7 @@ def handle_start_order_submission(ack, body, say):
     # get this user's info
     user_id = str(body["user"]["id"])
     # create a new task in the database 
-    task_id = int(datetime.now().timestamp()) # WARNING: THIS IS TEMPORARY # TODO: do when have a database
+    task_id = create_order_task(user_id)
     # create a new channel for this order 
     channel_id = create_task_channel(user_id, task_id)
     # sends a welcome message in the task channel
@@ -476,6 +466,93 @@ if __name__ == "__main__":
 #     filename = f"../../snapngo_pics/{user_id}_{task_id}_{datetime}.jpeg"
 #     open(filename, 'wb').write(r.content)
 #     return filename
+
+# def handle_message(payload, say):
+#     """
+#     Takes the response from a message sent in any chat in which this Bot has
+#         access to.
+#     When on, constantly listens for new messages, the responds as dictated below.
+#     Returns nothing.
+#     """
+#     channel_id = payload.get('channel')
+#     user_id = payload.get('user')
+#     text = payload.get('text')
+
+#     print("- Message sent", user_id, text, datetime.now())
+#     Handle certain responses
+#     if BOT_ID != user_id:
+#         if 'files' not in payload:
+#             if text.strip() == "?" or text.strip().lower() == 'help':
+#                 say(info_page)
+#             User only sends text without attaching an image
+#             elif text.strip().lower() == "account":
+#                 send_messages(user_id, generate_account_summary_block(user_id), "") 
+#             elif text.strip().lower() == "report":
+#                 active_block = make_report_block(user_id) 
+#                 end_block = [block_headers['divider'], block_headers['ending_block']]
+#                 client.chat_postMessage(channel=f"@{user_id}", blocks = active_block,text="")
+
+#                  # Sort pending tasks by start time
+#                 pending_ids = messenger.get_pending_tasks(user_id)
+#                 all_pending = [messenger.get_task_list(user_id, task_id) for task_id in pending_ids]
+#                 sorted_pending = sorted(all_pending, key=lambda task_list: task_list[4])
+#                 for task_list in sorted_pending:
+#                     pending_task = compact_task(task_list) 
+#                     buttons = copy.deepcopy(default_btn)
+#                     buttons['block_id'] = str(task_list[0])
+#                     blocks = [pending_task, buttons]
+
+#                     client.chat_postMessage(channel=f"@{user_id}", blocks = blocks, text="")
+
+#                 client.chat_postMessage(channel=f"@{user_id}", blocks = end_block,text="")
+#             elif text.strip().lower() == "opt in":
+#                 messenger.update_account_status(user_id, "active")
+#                 say("You have opted in for the day.")
+#             elif text.strip().lower() == "opt out":
+#                 messenger.update_account_status(user_id, "inactive")
+#                 say("You have opted out for the day.")
+#             else:
+#                 say(sample_task)
+#         else:
+#             # User attaches more than one image
+#             print("text+file", datetime.now())
+#             print(payload)
+#             if len(payload['files']) > 1: 
+#                 say("*:large_orange_circle: You are attaching more than one file.* Reply `?` for more information.")
+#                 return
+
+#             # User attaches a file that is not an image
+#             file = payload['files'][0]
+#             if "image" not in file['mimetype']: 
+#                 say("*:large_orange_circle: The file you attached is not an image.*\n Reply `?` for more information.")
+#                 return
+#             task_id = payload['blocks'][0]['elements'][0]['elements'][0]['text']
+#             print("TASK ID:", task_id)
+#             if not task_id.isdigit():
+#                 say(":large_orange_circle: Please include *only the task number* in the text & attach that tasks's image.")
+#                 return
+#             task_id = int(task_id)
+#             accepted_tasks = messenger.get_accepted_tasks(user_id)
+#             pending_tasks = messenger.get_pending_tasks(user_id)
+#             # The text the user enters isn't any of their assigned task numbers
+#             if messenger.check_time_window(task_id) == "expired":
+#                 say(f''':large_orange_circle: Task {task_id} has already expired. Please pick another assigned task to finish.''')
+#             elif messenger.check_time_window(task_id) == "not started":
+#                 say(f''':large_orange_circle: Task {task_id} has not started yet. Please check the start time & time window and finish this task later.''')
+#             elif task_id not in accepted_tasks: 
+#                 say(f":large_orange_circle: Task {task_id} is not one of your unfinished, accepted tasks. Your unfinished, accepted tasks are {accepted_tasks}")
+#                 if task_id in pending_tasks:
+#                     say(f'''However, task {task_id} is one of your pending tasks. You can still complete the task by pressing the Accept button for task {task_id} and then submit your picture.''')
+#                 return
+#             else:
+#                 print("submitted")
+#                 url = file['url_private_download']
+#                 path = get_pic(url, os.environ['TASK_BOT_TOKEN'], user_id, task_id)
+#                 if messenger.submit_task(user_id, task_id, path):
+#                     messenger.update_reliability(user_id)
+#                     say(f"We received your submission to task {task_id}. Your compensation will be secured once we checked your submission. Reply `account` for more information on your account and completed tasks.")
+#             #update database if image is NULL
+#         return #needs to be changed
 
 # def check_all_assignments():
 #     messenger.check_all_assignments()
