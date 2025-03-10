@@ -1,0 +1,34 @@
+{
+	"blocks": [
+		{
+			"type": "section",
+			"text": {
+				"type": "mrkdwn",
+				"text": "Welcome to Snack N Go! "
+			}
+		}, 
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "Let me submit my order!"
+                    },
+                    "action_id": "start_order_submission",
+                    "value": "start_order_submission"
+                },
+                {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "Check my account status"
+                    },
+                    "action_id": "check_account_status",
+                    "value": "check_account_status"
+                }
+            ]
+        }
+	]
+}

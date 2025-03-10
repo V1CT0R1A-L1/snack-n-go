@@ -4,7 +4,7 @@
 			"type": "section",
 			"text": {
 				"type": "mrkdwn",
-				"text": "Your order upload task has been created! Check out the new channel <#{PLACEHOLDER_CHANNELID}> for instructions."
+				"text": "Your order upload task has been created! Check out the new channel <#{PLACEHOLDER_CHANNEL_NAME}> for instructions."
 			}
 		}
 	]
