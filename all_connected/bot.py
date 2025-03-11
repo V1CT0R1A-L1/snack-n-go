@@ -301,6 +301,7 @@ def handle_check_account_status(ack, body, say):
     say(f"yay nothing ready yet")
 
 if __name__ == "__main__":
+    # TODO? Figure out how 
     user_store = get_all_users_info()
     messenger.add_users(user_store)
     send_welcome_message(user_store.keys())
