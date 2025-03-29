@@ -1,3 +1,9 @@
+/*
+Author: Amelia Zhang, based on work from Amy Fung & Cynthia Wang & Sofia Kobayashi & Helen Mao
+Date: 03/28/2025
+Description: 
+*/
+
 DROP DATABASE IF EXISTS `snapngo_db`;
 CREATE DATABASE `snapngo_db`;
 
