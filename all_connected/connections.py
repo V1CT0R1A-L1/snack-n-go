@@ -7,8 +7,8 @@ Description: File that connects all 5 components & calls functions for them to
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-env_path = Path('..') / '.env'
-load_dotenv(dotenv_path=env_path)
+env_path = Path(__file__).parent.parent / '.env'
+load_dotenv(env_path)
 
 import matching_assignments
 import task
@@ -22,7 +22,8 @@ import schedule
 from threading import Timer
 
 ### ### Control Center ### ###
-DB_NAME = os.environ['DB_NAME']
+# DB_NAME = os.environ['DB_NAME']
+DB_NAME = os.environ.get('DB_NAME')
 
 TASK_CYCLE = task_parameters.TASK_CYCLE #every half an hour
 NUM_TASKS_PER_CYCLE = task_parameters.NUM_TASKS_PER_CYCLE 

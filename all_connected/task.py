@@ -13,8 +13,8 @@ import pandas as pd
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-env_path = Path('..') / '.env'
-load_dotenv(dotenv_path=env_path)
+env_path = Path(__file__).parent.parent / '.env'
+load_dotenv(env_path)
 
 ### ### TASK PARAMETERS ### ###
 START_HOURS = task_parameters.START_HOURS
@@ -25,7 +25,7 @@ TASK_COMP = task_parameters.TASK_COMP # in points
 TASK_LOCATION_FILE = f'data/task_locations.json' #json file in data folder with an array of "sorted" locations
 TASK_DESCRIPTION_FILE = f'data/task_descriptions.json' # file with an array of strings of task decriptions
 
-DB_NAME = os.environ['DB_NAME'] # what does this do?
+DB_NAME = os.environ.get('DB_NAME') # what does this do?
 
 ### ### HELPER FUNCTIONS ### ###
 def random_datetime(n):

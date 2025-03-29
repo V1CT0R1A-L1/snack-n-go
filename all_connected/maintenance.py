@@ -17,8 +17,8 @@ import time
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-env_path = Path('..') / '.env'
-load_dotenv(dotenv_path=env_path)
+env_path = Path(__file__).parent.parent / '.env'
+load_dotenv(env_path)
 
 import json
 import requests
@@ -35,7 +35,8 @@ from datetime import datetime, timedelta, time, date
 
 
 ### ### Control Center ### ###
-DB_NAME = os.environ['DB_NAME']
+# DB_NAME = os.environ['DB_NAME']
+DB_NAME = os.environ.get('DB_NAME')
 
 START_HOURS = task_parameters.START_HOURS
 END_HOURS = task_parameters.END_HOURS

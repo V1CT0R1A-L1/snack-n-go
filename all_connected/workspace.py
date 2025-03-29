@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-env_path = Path('..') / '.env'
-load_dotenv(dotenv_path=env_path)
+env_path = Path(__file__).parent.parent / '.env'
+load_dotenv(env_path)
 
 from messenger import update_tasks_expired, get_task_list
 from helper_functions import connectDB

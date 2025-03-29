@@ -6,8 +6,8 @@ Description: General helper functions & environment set up for the overall Snap 
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-env_path = Path('..') / '.env'
-load_dotenv(dotenv_path=env_path)
+env_path = Path(__file__).parent.parent / '.env'
+load_dotenv(env_path)
 
 import pymysql
 from flask import Flask
@@ -28,7 +28,8 @@ def connectDB(dbName):
     db = pymysql.connect(
         host='localhost',
         user='root', 
-        password=os.environ['SQL_PASS'], 
+        # password=os.environ['SQL_PASS'], 
+        password=os.environ.get('SQL_PASS'), 
         db=dbName
     )
 
