@@ -1,5 +1,5 @@
 """
-Name: Victoria Lee, based on work from Amy Fung & Cynthia Wang & Sofia Kobayashi & Helen Mao
+Author: Victoria Lee, based on work from Amy Fung & Cynthia Wang & Sofia Kobayashi & Helen Mao
 Date: 03/29/2025
 Description: The main Slack bot logic for the food delivery data collection project
 """
