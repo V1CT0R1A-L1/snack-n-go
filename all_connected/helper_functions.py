@@ -17,7 +17,7 @@ from datetime import datetime, time
 
 
 
-def connectDB(dbName):
+def connectDB(DB_NAME):
     """
      * General Helper Function * 
     Takes a database name (str).
@@ -30,7 +30,7 @@ def connectDB(dbName):
         user='root', 
         # password=os.environ['SQL_PASS'], 
         password=os.environ.get('SQL_PASS'), 
-        db=dbName
+        db=DB_NAME
     )
 
     return db

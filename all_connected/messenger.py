@@ -28,14 +28,14 @@ def add_users(user_store):
     conn = helper_functions.connectDB(DB_NAME)
     cur = conn.cursor()
     # user_store = get_all_users_info()
-    query = '''INSERT IGNORE INTO users (name, id) VALUES (%s, %s)'''
+    query = '''INSERT IGNORE INTO users (username, id) VALUES (%s, %s)'''
     for key in user_store:
         not_bot = user_store[key]['is_bot'] == False
         not_slackbot = (key != 'USLACKBOT')
         deleted = user_store[key]['deleted']
         if not_bot and not_slackbot and (not deleted):
-            name = user_store[key]['name']
-            cur.execute(query, (name, key))
+            username = user_store[key]['name']
+            cur.execute(query, (username, key))
             conn.commit()
     conn.close()
 

@@ -21,11 +21,32 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_bolt.adapter.flask import SlackRequestHandler
 from datetime import date, datetime
+from helper_functions import *
 import random
 
+# TODO: Move to json
+ORDER_STAGES = {
+    'awaiting_placement_time': {
+        'next': 'awaiting_arrival_time',
+        'prompt': "Please upload a screenshot showing when you placed the order",
+        'field': 'order_placement_time',
+        'image_field': 'placement_screenshot_path'
+    },
+    'awaiting_arrival_time': {
+        'next': 'awaiting_missing_info',
+        'prompt': "Please upload a screenshot showing the estimated delivery time",
+        'field': ['earliest_estimated_arrival_time', 'latest_estimated_arrival_time'],
+        'image_field': 'arrival_screenshot_path'
+    },
+    'awaiting_missing_info': {
+        'next': 'completed',
+        'prompt': "Please upload any additional information if needed",
+        'field': None,
+        'image_field': None
+    }
+}
 
 ### ### CONSTANTS ### ###
-# DB_NAME = os.environ['DB_NAME']
 DB_NAME = os.environ.get('DB_NAME')
 
 EMOJI_DICT = {0: '🪴', 
@@ -52,11 +73,11 @@ with open(os.path.join(BLOCK_MESSAGES_DIR, 'sample_task.json'), 'r') as infile: 
 with open(os.path.join(BLOCK_MESSAGES_DIR, 'headers.json'), 'r') as infile:
     block_headers = json.load(infile)
 
-with open(os.path.join(BLOCK_MESSAGES_DIR, 'task_channel_welcome_message.json'), 'r') as infile:
-    task_channel_welcome_message = json.load(infile)  # TODO: modify welcome message
+with open(os.path.join(BLOCK_MESSAGES_DIR, 'channel_welcome_message.json'), 'r') as infile:
+    channel_welcome_message = json.load(infile)  # TODO: modify welcome message
 
-with open(os.path.join(BLOCK_MESSAGES_DIR, 'task_channel_created_confirmation.json'), 'r') as infile:
-    task_channel_created_confirmation = json.load(infile)
+with open(os.path.join(BLOCK_MESSAGES_DIR, 'channel_created_confirmation.json'), 'r') as infile:
+    channel_created_confirmation = json.load(infile)
 
 with open(os.path.join(BLOCK_MESSAGES_DIR, 'main_channel_welcome_message.json'), 'r') as infile:
     main_channel_welcome_message = json.load(infile)  # TODO: modify welcome message
@@ -73,19 +94,6 @@ if os.environ.get('SLACK_APP_TOKEN'):
 
 # Get the bot id
 BOT_ID = client.api_call("auth.test")['user_id']
-
-# TEMP: In-memory stage tracking
-# TODO: switch to database storage later
-order_stages = {} # order_stages[channel_id]["stage"/"extracted_data"/]
-STAGES = {
-    "RESTAURANT_NAME": 1,
-    "ORDER_PLACEMENT_TIME": 2,
-    "ESTIMATED_ARRIVAL_TIME": 3,
-    "ORDER_FINISH_TIME": 4,
-    "MISSING_INFO": 5,
-    "SURVEY": 6,
-    "COMPLETE": 7
-}
 
 ### ### HELPER FUNCTIONS ### ####
 def send_messages(channel_id, block=None, text=None):
@@ -106,42 +114,42 @@ def send_welcome_message(users_list) -> None:
                 print("Welcome!")
             except SlackApiError as e:
                 assert e.response["ok"] is False and e.response["error"], f"Got an error: {e.response['error']}"
-    # active_users = messenger.get_active_users_list()
-    # for user_id in users_list:
-    #     if BOT_ID != user_id and user_id in active_users:      
-    #         try:
-    #             print(f'IN Welcome: {user_id}', datetime.now())
-    #             client.chat_postMessage(channel=f"@{user_id}", blocks = onboarding['blocks'], text="Welcome to Snap N Go!")
-    #             print("Welcome!")
-    #         except SlackApiError as e:
-    #             assert e.response["ok"] is False and e.response["error"], f"Got an error: {e.response['error']}"
 
-def create_task_channel(user_id, task_id):
+def create_channel(user_id):
     """
     Helper function for handle_begin_task() in bot.py
-    Creates a new private channel for a task (an order submission) and invites the user asked for submitting a new order.
+    Creates a new private channel for an order submission and invites the user asked for submitting a new order.
     """
     try:
-        # create a new private channel
-        channel_name = f"order-upload-{task_id}" # TODO: change to a better name
+        # create database record
+        conn = connectDB(DB_NAME)
+        with conn.cursor() as cursor:
+            sql = f"INSERT INTO orders user_id VALUES {user_id}"
+            cursor.execute(sql)
+            order_id = cursor.lastrowid
+            conn.commit()
+
+        # create a new channel
+        channel_name = f"order-upload-{int(datetime.now().timestamp())}" # TODO: change to a better name
         response = client.conversations_create(
             name=channel_name, 
             is_private=True
         )
         channel_id = response["channel"]["id"]
 
+        # update channel id to database
+        sql = f"UPDATE orders SET channel_id = {channel_id} WHERE order_id = {order_id}"
+        cursor.execute(sql)
+        conn.commit()
+
         # invite the user to the channel
         client.conversations_invite(channel=channel_id, users=[user_id])
 
-        order_stages[channel_id] = {
-            "stage": STAGES["RESTAURANT_NAME"],
-            "extracted_data": {}
-        }
+        return order_id, channel_id
 
-        return channel_id
     except SlackApiError as e:
         print(f"Error creating channel: {e.response['error']}")
-        return None
+        return None, None
 
 def get_all_users_info() -> dict:
     '''
@@ -166,14 +174,13 @@ def get_all_users_info() -> dict:
     
     return users_store
 
-def create_order_task(user_id):
-    """
-    Create a new order upload task in the database.
-    Return a task_id corresponding to the task_id in the database. 
-    # TODO: Implementation when database ready
-    """
-    task_id = int(datetime.now().timestamp()) # WARNING: This is temproary!! # TODO: revise when database ready
-    return task_id
+def update_order_status(order_id, status):
+    """Update order status in database"""
+    conn = connectDB(DB_NAME)
+    with conn.cursor() as cursor:
+        sql = "UPDATE orders SET status = {status} WHERE order_id = {order_id}"
+        cursor.execute(sql)
+    conn.commit()
 
 def process_image(channel_id, file, say):
 
@@ -252,6 +259,8 @@ def handle_manual_input(channel_id, text, say):
             say(f"Thank you! The *{field.replace('_', ' ').title()}* has been updated.")
             verify_extracted_data(channel_id, say)
             return
+
+    return db
 
 ### ### MESSAGE HANDLERS ### ###
 @app.message()
@@ -352,15 +361,13 @@ def handle_start_order_submission(ack, body, say):
     ack()
     # get this user's info
     user_id = str(body["user"]["id"])
-    # create a new task in the database 
-    task_id = create_order_task(user_id)
     # create a new channel for this order 
-    channel_id = create_task_channel(user_id, task_id)
+    order_id, channel_id = create_channel(user_id)
     # sends a welcome message in the task channel
-    client.chat_postMessage(channel=channel_id, blocks=task_channel_welcome_message["blocks"])
+    client.chat_postMessage(channel=channel_id, blocks=channel_welcome_message["blocks"])
     # sends a confirmation message in the main channel
-    confirmation_message = task_channel_created_confirmation.copy()
-    confirmation_message["blocks"][0]["text"]["text"] = confirmation_message["blocks"][0]["text"]["text"].replace("PLACEHOLDER_CHANNEL_NAME", f"order-upload-{task_id}") # TODO: change the channel name when channel name in create_task_channel() changed
+    confirmation_message = channel_created_confirmation.copy()
+    confirmation_message["blocks"][0]["text"]["text"] = confirmation_message["blocks"][0]["text"]["text"].replace("PLACEHOLDER_CHANNEL_NAME", f"order-upload-{channel_id}") # TODO: change the channel name when channel name in create_task_channel() changed
     say(confirmation_message)
 
 @app.action("check_account_status")
