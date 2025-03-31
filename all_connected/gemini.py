@@ -57,13 +57,13 @@ def test_image_extraction(image_path):
 
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ SNACK'N'GO FUNCTION ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-def process_image(image_path, image_stage):
+def gemini_process_image(image_path, image_stage):
     """
     Processes food delivery screenshot based on stage and returns data in consistent format.
     
     Args:
         image_path: Path to the image file
-        image_stage: Either 'initial' (placement/arrival) or 'final' (completion)
+        image_stage: Either 'awaiting_placement_time' or 'awaiting_arrival_time'
         
     Returns:
         Dictionary with extracted data matching database schema:
@@ -94,10 +94,10 @@ def process_image(image_path, image_stage):
         result.update(restaurant_info)
         
         # Process based on stage
-        if image_stage == "initial":
+        if image_stage == "awaiting_placement_time":
             time_data = extract_initial_times(img)
             result.update(time_data)
-        elif image_stage == "final":
+        elif image_stage == "awaiting_arrival_time":
             completion_time = extract_completion_time(img)
             result["order_completion_time"] = completion_time
         
@@ -121,6 +121,7 @@ def extract_restaurant_info(img):
         "Extract: 1. Restaurant name (if shown) "
         "2. Restaurant address (if shown). "
         "Return as: 'Name: x, Address: y' or just what's available."
+        "Do not include ', Address: y' if address is not shown. "
     ])
     
     info = {"restaurant_name": None, "restaurant_address": None}
@@ -139,26 +140,36 @@ def extract_initial_times(img):
     """Extract order placement and estimated arrival times"""
     response = model.generate_content([
         img,
-        "Extract: 1. When order was placed (order placement time) "
-        "2. Estimated delivery time window (earliest and latest times). "
-        "Return all found times in their original format."
+        "Extract the following times separately:\n"
+        "1. Order placement time (usually at the top of the screenshot')\n"
+        "2. Earliest estimated delivery time (first time in delivery window)\n"
+        "3. Latest estimated delivery time (second time in delivery window)\n"
+        "Return in this exact format:\n"
+        "Order placement time: [time]\n"
+        "Delivery window: [earliest time] - [latest time]"
     ])
     
-    timestamps = process_gemini_response(response.text)
+    print("Raw Gemini response:", response.text)
+    
     time_data = {
         "order_placement_time": None,
         "earliest_estimated_arrival_time": None,
         "latest_estimated_arrival_time": None
     }
     
-    # Map extracted times to our fields
-    if "time_1" in timestamps:
-        time_data["order_placement_time"] = timestamps["time_1"]
-    if "time_2" in timestamps:
-        time_data["earliest_estimated_arrival_time"] = timestamps["time_2"]
-    if "time_3" in timestamps:
-        time_data["latest_estimated_arrival_time"] = timestamps["time_3"]
-        
+    placement_match = re.search(r"Order placement time:\s*([^\n]+)", response.text)
+    window_match = re.search(r"Delivery window:\s*([^\n-]+)\s*-\s*([^\n]+)", response.text)
+    
+    if placement_match:
+        placement_time = placement_match.group(1).strip()
+        time_data["order_placement_time"] = convert_to_unix(placement_time)
+    
+    if window_match:
+        earliest_time = window_match.group(1).strip()
+        latest_time = window_match.group(2).strip()
+        time_data["earliest_estimated_arrival_time"] = convert_to_unix(earliest_time)
+        time_data["latest_estimated_arrival_time"] = convert_to_unix(latest_time)
+    
     return time_data
 
 def extract_completion_time(img):
@@ -240,7 +251,7 @@ def convert_to_unix(time_string, am_pm_context=None):
 
 # take gemini info and convert extracted time to unix timestamp
 def process_gemini_response(response_text):
-
+    print("gemini raw response: ", response_text)
     time_data = {}
 
     # Simple regex to find time patterns (adjust as needed based on Gemini's response format)
@@ -310,7 +321,7 @@ if __name__ == "__main__":
 
     # info = process_image(image_file, "order-placement", "uber")
     # info = process_image(image_file2, "order-completion", "uber")
-    info = process_image(image_file3, "final")
+    info = gemini_process_image(image_file3, "final")
 
     if info:
         print(f"Gemini extracted :\n{info}")

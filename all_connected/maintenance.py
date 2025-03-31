@@ -94,9 +94,8 @@ def export_table_to_csv(table_name, csv_file):
 
 
 if __name__ == "__main__":
-    # add_new_users()
+    add_new_users()
     # bot.send_messages('U05B24S3LR1', block = None, text = 'Hello world')
     export_table_to_csv('users', '../users.csv')
-    export_table_to_csv('assignments', '../assignments.csv')
-    export_table_to_csv('tasks', '../tasks.csv')
+    export_table_to_csv('orders', '../orders.csv')
     print("DONE")
