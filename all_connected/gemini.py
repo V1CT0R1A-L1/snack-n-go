@@ -140,13 +140,13 @@ def extract_initial_times(img):
     """Extract order placement and estimated arrival times"""
     response = model.generate_content([
         img,
-        "Extract the following times separately:\n"
-        "1. Order placement time (usually at the top of the screenshot')\n"
-        "2. Earliest estimated delivery time (first time in delivery window)\n"
-        "3. Latest estimated delivery time (second time in delivery window)\n"
+        "Extract the following times separately and adjust their AM/PM logically if needed. Follow these principles:\n"
+        "1. **Relative Consistency:** If two times appear in the same context (e.g., order time and delivery time), ensure their relationship makes sense (e.g., delivery cannot be before ordering).\n"
+        "2. **24-Hour Clues:** If any time is in 24-hour format (e.g., '20:45'), assume other times nearby should align (e.g., '8:17' becomes '20:17').\n"
+        "3. **AM/PM Priority:** If AM/PM labels exist (e.g., '8:17 PM'), trust them. If missing, infer based on activity (e.g., '9:00' with 'Evening Delivery' text → PM).\n"
         "Return in this exact format:\n"
-        "Order placement time: [time]\n"
-        "Delivery window: [earliest time] - [latest time]"
+        "Order placement time: [time with AM/PM]\n"
+        "Delivery window: [earliest time with AM/PM] - [latest time with AM/PM]"
     ])
     
     print("Raw Gemini response:", response.text)

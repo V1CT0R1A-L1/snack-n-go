@@ -1,12 +1,26 @@
 {
 	"blocks": [
 		{
-			"type": "section",
-			"text": {
-				"type": "mrkdwn",
-				"text": "Welcome to Snack N Go! "
-			}
-		}, 
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "*Welcome to Snack N Go!*\n\nThank you for participating in our research project! Below you can choose to submit a new order or check your account status.\n\nIf you've selected to submit a new order, Slack will automatically create a new private channel for that specific order.\n\n*For order submission instructions, please refer to:*\n<https://docs.google.com/document/d/1JOXu2Qwi_I5X__FwH6g0dlyMh-QxqCFeLo3s5l5ImjI/edit?usp=sharing | order submission instructions document>\nSend `?` or `help` for getting this block message again."
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "If you encounter a bug, typo, or other error at any point in the order submission process or other issues, feel free to fill out this <https://docs.google.com/forms/d/e/1FAIpQLSe7U05qgO7AUrkEcH4brPSnPAsvjgfcE3kEhOrg1b8ZoNPWdA/viewform?usp=sharing | form>!"
+            }
+        }, 
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "Feel free to contact BOTH of our team members (so that we can get back to you quicker) via email with any other questions or concerns: Amelia Zhang (az111@wellesley.edu), Victoria Lee (vl111@wellesley.edu)"
+            }
+        },
         {
             "type": "actions",
             "elements": [

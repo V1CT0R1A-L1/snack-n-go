@@ -17,6 +17,7 @@ from datetime import datetime
 from helper_functions import *
 from gemini import *
 import messenger
+import re
 
 ## Load environment variables ##
 env_path = Path(__file__).parent.parent / '.env'
@@ -39,7 +40,6 @@ def load_message_block(filename):
         return json.load(infile)
 
 MESSAGE_BLOCKS = {
-    'sample_task': load_message_block('sample_task.json'),
     'headers': load_message_block('headers.json'),
     'channel_welcome': load_message_block('channel_welcome_message.json'),
     'channel_created': load_message_block('channel_created_confirmation.json'),
@@ -55,7 +55,7 @@ ORDER_STAGES = {
     },
     'awaiting_initial_screenshot': {
         'next': 'verifying_initial_data',
-        'prompt': "Please upload your order confirmation screenshot (shows restaurant, placement time, and delivery estimate)",
+        'prompt': None,
         'actions': ['file_upload']
     },
     'verifying_initial_data': {
@@ -65,7 +65,7 @@ ORDER_STAGES = {
     },
     'awaiting_completion_screenshot': {
         'next': 'verifying_completion_data',
-        'prompt': "Please upload screenshot showing order delivered time",
+        'prompt': "Thanks for verifying all this information! Now we will move on to submitting the second screenshot which will be an *order completion* screenshot. This is usually taken right after you receive your order from the driver and includes information about the *order completion time* aka when the order was delivered. Please give snack\'n\'go a few seconds to process your image before we proceed to the next step 🙂",
         'actions': ['file_upload']
     },
     'verifying_completion_data': {
@@ -136,7 +136,7 @@ def parse_human_time_to_unix(time_str):
         except:
             return None
 
-def db_operation(query, params=None, fetch_one=False):
+def db_operation(query, params=None, fetch_one=False, fetch_all=False):
     """Generic database operation handler"""
     conn = None
     try:
@@ -145,8 +145,10 @@ def db_operation(query, params=None, fetch_one=False):
             cursor.execute(query, params or ())
             if fetch_one:
                 result = cursor.fetchone()
-            else:
+            elif fetch_all:
                 result = cursor.fetchall()
+            else:
+                result = None  # For operations that don't return results (INSERT/UPDATE)
             conn.commit()
             return result
     except Exception as e:
@@ -337,6 +339,7 @@ def send_input_prompt(channel_id, field, is_missing=False, client=None):
 
 def process_image(channel_id, file):
     """Process uploaded image based on order stage"""
+    print(f"[IMAGE PROCESSING] Processing image in channel {channel_id}, File: {file['name']}", datetime.now())
     allowed_mimetypes = ["image/png", "image/jpeg", "image/jpg"]
     max_size_mb = 5
     
@@ -506,18 +509,27 @@ def handle_stage_completion(order, client):
     current_stage = order['status']
     next_stage = ORDER_STAGES.get(current_stage, {}).get('next')
     
+    print(f"[STAGE CHANGE] Channel {channel_id} moving from {current_stage} to {next_stage}", datetime.now())
+
     if not next_stage:
         client.chat_postMessage(
             channel=channel_id,
-            text="🎉 Thank you! Your order submission is complete."
+            text="Thank you! Submission complete. ",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": "🎉 *Thank you!* Your order submission is complete.\n\nFor future reference, you can review the instructions here:\n<https://docs.google.com/document/d/1JOXu2Qwi_I5X__FwH6g0dlyMh-QxqCFeLo3s5l5ImjI/edit?usp=sharing | order submission instructions document>"
+                    }
+                }
+            ]
         )
         return
     
     # Update to next stage
     if update_order(order['channel_id'], {'status': next_stage}):
         # Show progress indicator with the new stage
-        show_progress_status(channel_id, next_stage)
-        
         next_prompt = ORDER_STAGES.get(next_stage, {}).get('prompt')
         if next_prompt:
             client.chat_postMessage(
@@ -527,7 +539,7 @@ def handle_stage_completion(order, client):
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"*Next Step:* {next_prompt}"
+                        "text": f"{next_prompt}"
                     }
                 }]
             )
@@ -581,17 +593,15 @@ def update_message_after_action(client, channel_id, ts, original_blocks, decisio
     )
 
 ### MESSAGE HANDLERS ###
-@app.event("message")
-def handle_message_events(body, logger):
-    logger.info(body)
-
 @app.event("file_created")
 def handle_file_created_events(body, logger):
     logger.info(body)
 
-@app.message()
+@app.event("message")
 def handle_message(payload, say):
     """Handle text messages and messages with files"""
+    print(json.dumps(payload, indent=2))
+
     channel_id = payload.get('channel')
     user_id = payload.get('user')
     text = payload.get('text', '').strip().lower()
@@ -599,156 +609,21 @@ def handle_message(payload, say):
     if user_id == BOT_ID:
         return
 
-    print(f"Message from {user_id}: {text}", datetime.now())
-
-    if not text or text in ("?", "help"):
-        # Improved help message
-        say(blocks=[
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*🤖 Food Delivery Data Collection Bot Help*"
-                }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "Here's how I can help you submit your food delivery data:"
-                }
-            },
-            {
-                "type": "section",
-                "fields": [
-                    {
-                        "type": "mrkdwn",
-                        "text": "*Commands:*"
-                    },
-                    {
-                        "type": "mrkdwn",
-                        "text": "*Description:*"
-                    },
-                    {
-                        "type": "mrkdwn",
-                        "text": "`help` or `?`"
-                    },
-                    {
-                        "type": "mrkdwn",
-                        "text": "Show this help menu"
-                    },
-                    {
-                        "type": "mrkdwn",
-                        "text": "`account`"
-                    },
-                    {
-                        "type": "mrkdwn",
-                        "text": "View your account status and earnings"
-                    },
-                    {
-                        "type": "mrkdwn",
-                        "text": "`report`"
-                    },
-                    {
-                        "type": "mrkdwn",
-                        "text": "Report issues or provide feedback"
-                    },
-                    {
-                        "type": "mrkdwn",
-                        "text": "`restart`"
-                    },
-                    {
-                        "type": "mrkdwn",
-                        "text": "Restart current order submission"
-                    }
-                ]
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*📱 Submission Process:*\n1. Select the delivery app you used\n2. Upload order confirmation screenshot\n3. Verify order details\n4. Upload delivery completion screenshot\n5. Verify delivery details\n6. Review and complete submission"
-                }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*💡 Tips:*\n• Upload clear, readable screenshots\n• For time formats, use YYYY-MM-DD HH:MM or just HH:MM for today\n• Start a new submission from the main channel"
-                }
-            },
-            {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Start New Submission"},
-                        "action_id": "start_order_submission",
-                        "style": "primary"
-                    }
-                ]
-            }
-        ])
-    elif text.lower() == "account":
-        handle_check_account_status(lambda: None, {"user": {"id": user_id}}, say)
-    elif text.lower() == "report":
-        say(blocks=[
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Report an Issue*\nPlease describe any issues you're experiencing:"
-                }
-            },
-            {
-                "type": "input",
-                "block_id": "bug_report_input",
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": "text_input",
-                    "multiline": True
-                },
-                "label": {
-                    "type": "plain_text",
-                    "text": "Describe the issue:"
-                }
-            },
-            {
-                "type": "actions",
-                "elements": [
-                    create_button("Submit Report", "submit_bug_report", "report")
-                ]
-            }
-        ])
-    elif text.lower() == "restart":
-        # Add a new command to restart the current order
-        order = get_order_info(channel_id)
-        if order:
-            say(blocks=[
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": "Are you sure you want to restart your current submission? This will delete the current progress."
-                    }
-                },
-                {
-                    "type": "actions",
-                    "elements": [
-                        create_button("Yes, Restart", "restart_order", channel_id, "danger"),
-                        create_button("No, Cancel", "cancel_restart", channel_id)
-                    ]
-                }
-            ])
-        else:
-            say("No active order to restart. To start a new order, use the 'Start New Submission' button.")
-    elif 'files' in payload:
+    print(f"[USER MESSAGE] Message from {user_id}: {text}", datetime.now())
+    if text in ["help", "?"]:
+        print(f"[HELP REQUEST] User {user_id} requested help", datetime.now())
+        say(text="Here's how I can help you!",
+            blocks=MESSAGE_BLOCKS["main_channel_welcome_message"]['blocks'])
+        return
+    if 'files' in payload:
+        print(f"[FILE UPLOAD] User {user_id} uploaded {len(payload['files'])} files",  datetime.now())
         if len(payload['files']) > 1:
             say("Please upload only one file at a time.")
             return
         file = payload['files'][0]
         if "image" not in file['mimetype']:
-            say(blocks=[{
+            say(text="Please upload an image file. ", 
+                blocks=[{
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
@@ -758,7 +633,7 @@ def handle_message(payload, say):
             return
         process_image(channel_id, file)
     else:
-        say(MESSAGE_BLOCKS['sample_task'])
+        say()
 
 def send_messages(channel_id, block=None, text=None):
     messenger.send_message(channel_id, block, text)
@@ -779,71 +654,26 @@ def send_welcome_message(users_list) -> None:
             except SlackApiError as e:
                 assert e.response["ok"] is False and e.response["error"], f"Got an error: {e.response['error']}"
 
-@app.action("restart_order")
-def handle_restart_order(ack, body, say):
-    ack()
-    channel_id = body["actions"][0]["value"]
-    
-    # Reset the order status to the beginning
-    if update_order(channel_id, {"status": "awaiting_app_selection"}):
-        say("Order has been restarted. Let's try again.")
-        client.chat_postMessage(
-            channel=channel_id,
-            text="Which delivery app did you use?",
-            blocks=[{
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn", 
-                    "text": "*Order Restarted*\nWhich delivery app did you use?"
-                }
-            }, {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Uber Eats"},
-                        "action_id": "select_app",
-                        "value": "uber"
-                    },
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "DoorDash"},
-                        "action_id": "select_app",
-                        "value": "doordash" 
-                    },
-                    {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Grubhub"},
-                        "action_id": "select_app",
-                        "value": "grubhub"
-                    }
-                ]
-            }]
-        )
-    else:
-        say("Sorry, I couldn't restart the order. Please try again.")
-
-@app.action("cancel_restart")
-def handle_cancel_restart(ack, body, say):
-    ack()
-    say("Order restart canceled. Your current progress is saved.")
-
 @app.action("process_input")
 def handle_user_input(ack, body, say, logger, client):
     try:
-        # Always acknowledge first
         ack()
+        channel_id = body["container"]["channel_id"]
+
+        user_id = body["user"]["id"]
+
         
-        # Print the full payload for debugging
         print("\n=== FULL PAYLOAD ===")
         print(json.dumps(body, indent=2, default=str))
         
-        # Extract values safely
+        field = block_id.replace("correct_", "").replace("missing_", "")
+        value = block_content["text_input"]["value"]
+        print(f"[USER INPUT] User {user_id} provided input for {field}: {value}", datetime.now())
+
         try:
             channel_id = body["container"]["channel_id"]
             state_values = body["state"]["values"]
             
-            # Find the first text input (works regardless of block_id)
             for block_id, block_content in state_values.items():
                 if "text_input" in block_content:
                     value = block_content["text_input"]["value"]
@@ -857,7 +687,6 @@ def handle_user_input(ack, body, say, logger, client):
             say("⚠️ We couldn't process your input. Please try again.")
             return
 
-        # Process the update
         try:
             updates = {}
             if field.endswith('_time'):
@@ -892,6 +721,9 @@ def handle_file_shared_events(body, logger):
     logger.info("File shared event received")
     file_id = body["event"]["file_id"]
     channel_id = body["event"]["channel_id"]
+    user_id = body["event"]["user"]["id"]
+
+    print(f"[FILE SHARED] User {user_id} shared file in channel {channel_id}", datetime.now())
     
     try:
         file_info = client.files_info(file=file_id)["file"]
@@ -930,6 +762,7 @@ def handle_team_join(body, logger, say):
     user_store = get_all_users_info()
     messenger.add_users(user_store)
     user_id = body["event"]["user"]["id"]
+    print(f"[NEW USER] User {user_id} joined the workspace", datetime.now())
     send_welcome_message([user_id])
 
 @app.action("start_order_submission")
@@ -938,16 +771,17 @@ def handle_start_order_submission(ack, body, say):
     ack()
     user_id = body["user"]["id"]
     order_id, channel_id = create_channel(user_id)
-    
+    print(f"[ORDER STARTED] User {user_id} started new order submission at {datetime.now()}") 
+
     if order_id and channel_id:
         client.chat_postMessage(
             channel=channel_id,
-            text = 'which delivery app did you use?', 
+            text = 'Which of the following delivery apps do you use?', 
             blocks=[{
                 "type": "section",
                 "text": {
                     "type": "mrkdwn", 
-                    "text": f"*Order #{order_id} Started*\nWhich delivery app did you use?"
+                    "text": f"*Order #{order_id} Started*\nWhich of the following delivery apps do you use?"
                 }
             }, {
                 "type": "actions",
@@ -974,6 +808,9 @@ def handle_start_order_submission(ack, body, say):
             }]
         )
         say(f"Created private channel for your order: <#{channel_id}>")
+    else:
+        print("Failed to create order channel")
+        say("Failed to create order channel.")
 
 @app.action("select_app_uber")
 def handle_app_selection(ack, body, say):
@@ -1000,7 +837,14 @@ def handle_app_selection(ack, body, say):
                 "type": "section",
                 "text": {
                     "type": "mrkdwn", 
-                    "text": f"*Order App Selected*\nYou selected: *{app_display_name}*"
+                    "text": f"*Order App Selected*\nGreat! You picked *{app_display_name}*. Now, we will move on to submitting your screenshots!"
+                }
+            }, 
+            {
+                "type": "section", 
+                "text": {
+                    "type": "mrkdwn", 
+                    "text": f"The first screenshot you need to upload is the *order submission* screenshot. This is usually taken right after you make an order through {app_display_name} and includes information about the *current time*⏱︎ , *restaurant name*🍽️, and *estimated delivery time/window*🪟. Please give snack\'n\'go a few seconds to process your image before we proceed to the next step 🙂"
                 }
             }
         ],
@@ -1128,6 +972,9 @@ def handle_verification_yes(ack, body, say):
     channel_id = body["container"]["channel_id"]
     ts = body["container"]["message_ts"]
     field = body["actions"][0]["value"].split("|")[0]
+    user_id = body["user"]["id"]
+
+    print(f"[VERIFICATION] User {user_id} confirmed field {field} in channel {channel_id}", datetime.now())
     
     # Update message to show decision
     update_message_after_action(
@@ -1171,39 +1018,79 @@ def handle_check_account_status(ack, body, say):
         )
         
         if user_data:
+            # Get order statistics
             total_orders = db_operation(
                 "SELECT COUNT(*) FROM orders WHERE user_id = %s",
                 (user_id,),
                 fetch_one=True
-            )['count']
+            )['COUNT(*)']
             
             completed_orders = db_operation(
                 "SELECT COUNT(*) FROM orders WHERE user_id = %s AND status = 'completed'",
                 (user_id,),
                 fetch_one=True
-            )['count']
+            )['COUNT(*)']
             
-            say(f"""
-*Your Account Status:*
-- Total compensation: ${user_data['total_compensation']}
+            rejected_orders = db_operation(
+                "SELECT COUNT(*) FROM orders WHERE user_id = %s AND status = 'rejected'",
+                (user_id,),
+                fetch_one=True
+            )['COUNT(*)']
+            
+            pending_orders = db_operation(
+                """SELECT COUNT(*) FROM orders WHERE user_id = %s 
+                   AND status NOT IN ('completed', 'rejected')""",
+                (user_id,),
+                fetch_one=True
+            )['COUNT(*)']
+            
+            # Get the most recent orders for history
+            recent_orders = db_operation(
+                """SELECT order_id, restaurant_name, status, channel_creation_time 
+                FROM orders WHERE user_id = %s 
+                ORDER BY channel_creation_time DESC LIMIT 5""",
+                (user_id,),
+                fetch_one=False
+            )
+            
+            # Format recent orders for display
+            orders_history = "\n".join(
+                [f"- Order #{o['order_id']}: {o['restaurant_name']} ({o['status']})" 
+                 for o in recent_orders]
+            ) if recent_orders else "No recent orders"
+
+            compensation_type = user_data['compensation_category']
+            if compensation_type == 'staged_raffle':
+                explanation_link = "<https://docs.google.com/document/d/1sip1ct22LFrP4dXjwdH0j_A7hBjtvsFUCwKPhRTvS8w/edit?usp=sharing | What does this mean?>"
+            elif compensation_type == 'submission_count':
+                explanation_link = "<https://docs.google.com/document/d/1Cri52reeZ2jFT0YkGvPEu04LvAQYYFd8dNCzD2tvNnc/edit?usp=sharing | What does this mean?>"
+            else:
+                explanation_link = ""
+            
+            # Format the message
+            message = f"""
+                *Your Account Status:*
+- Username: {user_data['username']}
+- Account Status: {user_data['status'].capitalize()}
+- Compensation Type: {compensation_type.replace('_', ' ').title()} {explanation_link}
+
+*Order Statistics:*
 - Total orders submitted: {total_orders}
 - Completed orders: {completed_orders}
-- Pending orders: {total_orders - completed_orders}
-            """)
+- Rejected orders: {rejected_orders}
+- Pending orders: {pending_orders}
+
+*Recent Order History:*
+{orders_history}
+            """
+            
+            say(message.strip())
         else:
-            say("No account information found.")
+            say("No account information found. ")
             
     except Exception as e:
-        say("Sorry, I couldn't retrieve your account information.")
+        say("Sorry, I couldn't retrieve your account information. ")
         print(f"Error getting account status: {e}")
-
-@app.action("submit_bug_report")
-def handle_bug_report(ack, body, say):
-    """Handle bug report submissions"""
-    ack()
-    user_id = body["user"]["id"]
-    say("Please describe the bug you encountered:")
-    # This would typically open a modal for more detailed input
 
 def start_field_verification(channel_id, client):
     """
@@ -1272,67 +1159,6 @@ def start_field_verification(channel_id, client):
         blocks=blocks
     )
 
-def show_progress_status(channel_id, current_stage):
-    """Show a visual progress indicator to the user"""
-    stages = [
-        "App Selection", 
-        "Initial Screenshot", 
-        "Verify Order Details", 
-        "Delivery Screenshot", 
-        "Verify Delivery", 
-        "Review & Complete"
-    ]
-    
-    # Map from database status to user-friendly stage number (0-based)
-    stage_mapping = {
-        'awaiting_app_selection': 0,
-        'awaiting_initial_screenshot': 1,
-        'verifying_initial_data': 2,
-        'awaiting_completion_screenshot': 3,
-        'verifying_completion_data': 4,
-        'collecting_missing_info': 5,
-        'completed': 6
-    }
-    
-    current_index = stage_mapping.get(current_stage, 0)
-    
-    # Create progress bar
-    progress_text = ""
-    for i, stage in enumerate(stages):
-        if i < current_index:
-            # Completed step
-            progress_text += f"✅ *{stage}* → "
-        elif i == current_index:
-            # Current step
-            progress_text += f"🔷 *{stage}* → "
-        else:
-            # Future step
-            progress_text += f"⭕ {stage} → "
-    
-    # Remove the last arrow
-    progress_text = progress_text.rstrip(" → ")
-    
-    client.chat_postMessage(
-        channel=channel_id,
-        text="Order Progress",
-        blocks=[
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "*Your Order Submission Progress:*"
-                }
-            },
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": progress_text
-                }
-            }
-        ]
-    )
-
 def check_for_missing_info(channel_id, client):
     """Check if any required fields are missing and prompt for them"""
     order = get_order_info(channel_id)
@@ -1367,9 +1193,24 @@ def check_for_missing_info(channel_id, client):
         if update_order(channel_id, {'status': 'completed'}):
             client.chat_postMessage(
                 channel=channel_id, 
-                text = "Thank you! Your order submission is complete."
+                text = "Thank you! Your order submission is complete.",
+                blocks = [
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": "Thank you for submitting your screenshots and verifying the times on those screenshots! Your order submission is now complete. You\'ve finished everything required on your end, and we\'ll take it from here."
+                            }
+                        }, 
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": "If you encounter a bug, typo, or other error at any point in the order submission process or other issues, feel free to fill out this <https://docs.google.com/forms/d/e/1FAIpQLSe7U05qgO7AUrkEcH4brPSnPAsvjgfcE3kEhOrg1b8ZoNPWdA/viewform?usp=sharing | form>!"
+                            }
+                        }
+                ]
             )
-            # TODO: COMPENSATION
 
 if __name__ == "__main__":
     # TODO? Figure out why team join doesnt work when app starts

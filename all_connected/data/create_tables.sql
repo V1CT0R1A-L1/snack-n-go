@@ -4,30 +4,46 @@ Date: 03/28/2025
 Description: Updated to store all timestamps as Unix timestamps (integers)
 */
 
-DROP DATABASE IF EXISTS `snapngo_db`;
-CREATE DATABASE `snapngo_db`;
+DROP DATABASE IF EXISTS `snackngo_db`;
+CREATE DATABASE `snackngo_db`;
 
-USE `snapngo_db`;
+USE `snackngo_db`;
 
 DROP TABLE IF EXISTS `users`;
 DROP TABLE IF EXISTS `orders`;
 
 CREATE TABLE IF NOT EXISTS users (
-    id VARCHAR(50), -- randomly generated
+    id VARCHAR(50) PRIMARY KEY, -- randomly generated
     username VARCHAR(50),
     email VARCHAR(50),
-    total_compensation DECIMAL(5,2) DEFAULT 0, 
-    status ENUM('active', 'inactive') DEFAULT 'active', 
-    PRIMARY KEY (id)
+    status ENUM('active', 'inactive') DEFAULT 'active',
+    compensation_category ENUM('staged_raffle', 'submission_count'),
+    user_number INT AUTO_INCREMENT UNIQUE -- for odd/even determination
 )
 ENGINE = InnoDB;
+
+DELIMITER //
+CREATE TRIGGER set_comp_category
+BEFORE INSERT ON users
+FOR EACH ROW
+BEGIN
+    DECLARE next_num INT;
+    
+    -- Get the next auto-increment value
+    SELECT AUTO_INCREMENT INTO next_num
+    FROM information_schema.TABLES
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users';
+    
+    -- Set category based on odd/even
+    SET NEW.compensation_category = IF(next_num % 2 = 1, 'staged_raffle', 'submission_count');
+END//
+DELIMITER ;
 
 CREATE TABLE IF NOT EXISTS orders (
     -- Order info
     order_id INT AUTO_INCREMENT,
     user_id VARCHAR(50),
     channel_id VARCHAR(50), -- current timestamp. one order is associated with one channel
-    compensation DECIMAL(5,2) DEFAULT 0.00, 
     app_used VARCHAR(20),
     channel_creation_time INT,
     channel_completion_time INT,
