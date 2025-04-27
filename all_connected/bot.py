@@ -18,6 +18,10 @@ from helper_functions import *
 from gemini import *
 import messenger
 import re
+import certifi
+from datetime import datetime
+
+
 
 ## Load environment variables ##
 env_path = Path(__file__).parent.parent / '.env'
@@ -25,7 +29,7 @@ load_dotenv(env_path)
 
 ### CONSTANTS ###
 DB_NAME = os.environ.get('DB_NAME')
-BOT_ID = WebClient(token=os.environ.get('SLACK_BOT_TOKEN')).api_call("auth.test")['user_id']
+BOT_ID=WebClient(token=os.environ.get('SLACK_BOT_TOKEN')).api_call("auth.test")['user_id']
 
 ## Path configurations ##
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -589,6 +593,7 @@ def update_message_after_action(client, channel_id, ts, original_blocks, decisio
     client.chat_update(
         channel=channel_id,
         ts=ts,
+        text=f"*Decision:* {decision_text}",
         blocks=new_blocks
     )
 
@@ -605,8 +610,13 @@ def handle_message(payload, say):
     channel_id = payload.get('channel')
     user_id = payload.get('user')
     text = payload.get('text', '').strip().lower()
+    subtype = payload.get('subtype')
 
     if user_id == BOT_ID:
+        return
+
+    if subtype == 'channel_join':
+        print(f"[CHANNEL JOIN] User {user_id} joined channel {channel_id}", datetime.now())
         return
 
     print(f"[USER MESSAGE] Message from {user_id}: {text}", datetime.now())
@@ -656,24 +666,17 @@ def send_welcome_message(users_list) -> None:
 
 @app.action("process_input")
 def handle_user_input(ack, body, say, logger, client):
+    ack()
+    user_id=body["user"]["id"]
+    print("\n=== FULL PAYLOAD ===")
+    print(json.dumps(body, indent=2, default=str))
     try:
-        ack()
         channel_id = body["container"]["channel_id"]
-
-        user_id = body["user"]["id"]
-
-        
-        print("\n=== FULL PAYLOAD ===")
-        print(json.dumps(body, indent=2, default=str))
-        
-        field = block_id.replace("correct_", "").replace("missing_", "")
-        value = block_content["text_input"]["value"]
-        print(f"[USER INPUT] User {user_id} provided input for {field}: {value}", datetime.now())
-
+        state_values = body["state"]["values"]
+        value = None
+        field = None
         try:
-            channel_id = body["container"]["channel_id"]
-            state_values = body["state"]["values"]
-            
+
             for block_id, block_content in state_values.items():
                 if "text_input" in block_content:
                     value = block_content["text_input"]["value"]
@@ -681,12 +684,13 @@ def handle_user_input(ack, body, say, logger, client):
                     break
             else:
                 raise ValueError("No text input found in state.values")
-                
+
         except Exception as e:
             print(f"Extraction error: {e}")
             say("⚠️ We couldn't process your input. Please try again.")
             return
 
+        # Process the update
         try:
             updates = {}
             if field.endswith('_time'):
@@ -698,7 +702,8 @@ def handle_user_input(ack, body, say, logger, client):
             else:
                 updates[field] = value
 
-            # Handle verification flags for missing fields
+            print(f"[USER INPUT] User {user_id} provided input for {field}: {value}", datetime.now())
+            
             if "missing_" in block_id:
                 updates[f"is_{field}_verified"] = True
 
@@ -707,7 +712,7 @@ def handle_user_input(ack, body, say, logger, client):
                     check_for_missing_info(channel_id, client)
                 else:
                     start_field_verification(channel_id, client)
-                    
+
         except Exception as e:
             print(f"Update error: {e}")
             say("⚠️ Failed to update your information. Please try again.")
@@ -1075,7 +1080,7 @@ def handle_check_account_status(ack, body, say):
 - Compensation Type: {compensation_type.replace('_', ' ').title()} {explanation_link}
 
 *Order Statistics:*
-- Total orders submitted: {total_orders}
+- Total orders: {total_orders}
 - Completed orders: {completed_orders}
 - Rejected orders: {rejected_orders}
 - Pending orders: {pending_orders}
@@ -1216,6 +1221,5 @@ if __name__ == "__main__":
     # TODO? Figure out why team join doesnt work when app starts
     user_store = get_all_users_info()
     messenger.add_users(user_store)
-    send_welcome_message(user_store.keys())
     handler = SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN"))
     handler.start()

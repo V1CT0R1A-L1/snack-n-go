@@ -22,7 +22,7 @@ if not GOOGLE_API_KEY:
     raise ValueError("No GOOGLE_API_KEY found in environment variables.  Please set it.")
 
 genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # extract timestamp from an image using the Gemini API
 def test_image_extraction(image_path):
