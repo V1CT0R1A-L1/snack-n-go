@@ -20,7 +20,7 @@ This is a Slack bot interested in 🫵 YOUR 🫵 food delivery pattern as a Well
 
 | Contributor |
 | ------------- |
-| Victoria Lee (vl111@wellesley.edu) |
+| Victoria Li (vl111@wellesley.edu) |
 | Amelia Zhang (az111@wellesley.edu) |
 | Kimberly Hseuh (kh104@wellesley.edu) |
 | Professor Christine Bassem (cbassem@wellesley.edu) |
