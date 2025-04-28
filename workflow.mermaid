@@ -1,10 +1,10 @@
-graph TD
+graph LR
     A[Start Order] --> B[Specify App]
     B --> C[Upload Initial Screenshot]
-    C --> D{Extract All Data}
-    D --> E[Verify Restaurant]
+    C --> D{Extract Data}
+    D --> E[Verify Restaurant Name]
     E -->|Yes| F[Verify Placement Time]
-    E -->|No| G[Correct Restaurant]
+    E -->|No| G[Correct Restaurant Name]
     G --> E
     F -->|Yes| H[Verify Delivery Window]
     F -->|No| I[Correct Placement Time]
@@ -12,10 +12,11 @@ graph TD
     H -->|Yes| J[Request Completion SS]
     H -->|No| K[Correct Delivery Window]
     K --> H
-    J --> L{Extract Completion}
-    L --> M[Verify Completion]
+    J --> L{Extract Data}
+    L --> M[Verify Completion Time]
     M -->|Yes| N[Check Missing Info]
     M -->|No| O[Correct Completion]
     O --> M
-    N --> P[Request Survey]
-    P --> Q[Finalize]
+    N -->|Missing Info| R[Complete Missing Info]
+    R --> Q
+    N -->|No Missing Info| Q[Finalize]
