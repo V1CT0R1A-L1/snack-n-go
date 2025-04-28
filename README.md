@@ -10,7 +10,7 @@ This is a Slack bot interested in 🫵 YOUR 🫵 food delivery pattern as a Well
 - 🎉 **User-Friendly**: Cute emojis and clear instructions at every step
 - 🔒 **Privacy-Focused**: Carefully handles sensitive information
 
-## � Tech Stack
+## 🛠️ Tech Stack
 
 - **Backend**: Python with Slack Bolt API
 - **AI Processing**: Google Gemini for image analysis
