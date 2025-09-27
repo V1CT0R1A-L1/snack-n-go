@@ -1,10 +1,11 @@
 '''
-Author: Amelia Zhang
-Date: 03/28/2025
+Author: Amelia Zhang, Victoria Li
+Date: 09/27/2025
 Description: 
 '''
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from PIL import Image
 from dotenv import load_dotenv
 from datetime import datetime
@@ -21,8 +22,7 @@ GOOGLE_API_KEY = DB_NAME = os.environ.get('GOOGLE_API_KEY') # Get API key from e
 if not GOOGLE_API_KEY:
     raise ValueError("No GOOGLE_API_KEY found in environment variables.  Please set it.")
 
-genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+client = genai.Client()
 
 # extract timestamp from an image using the Gemini API
 def test_image_extraction(image_path):
@@ -31,13 +31,11 @@ def test_image_extraction(image_path):
         # Load the image
         img = Image.open(image_path)
 
-        # Load the model
-        model = genai.GenerativeModel("gemini-1.5-flash")
-
         # Generate content
-        response = model.generate_content([img, "extract the time screenshot was made, usually top left of screen if iphone aka current time and extract any other times if provided in image eg order placement or completion time."])
-        # response = model.generate_content([img, "extract metadata of the screenshot, specifically the time of when the ss was made."])
-
+        response = client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=[img, "extract the time screenshot was made, usually top left of screen if iphone aka current time and extract any other times if provided in image eg order placement or completion time."]
+        )
 
         return response.text
 
@@ -116,15 +114,19 @@ def gemini_process_image(image_path, image_stage):
 
 def extract_restaurant_info(img):
     """Extract restaurant name and address from image"""
-    response = model.generate_content([
-        img,
-        "Extract: 1. Restaurant name (if shown) "
-        "2. Restaurant address (if shown). "
-        "Return as: 'Name: x, Address: y' or just what's available."
-        "Do not include ', Address: y' if address is not shown. "
-    ])
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash-lite",
+        contents=[
+            img,
+            "Extract: 1. Restaurant name (if shown) "
+            "2. Restaurant address (if shown). "
+            "Return as: 'Name: x, Address: y' or just what's available."
+            "Do not include ', Address: y' if address is not shown. "
+        ]
+    )
     
-    info = {"restaurant_name": None, "restaurant_address": None}
+    info = {"restaurant_name": "", "restaurant_address": ""}
     location_text = response.text
     
     if "name:" in location_text.lower():
@@ -138,16 +140,19 @@ def extract_restaurant_info(img):
 
 def extract_initial_times(img):
     """Extract order placement and estimated arrival times"""
-    response = model.generate_content([
-        img,
-        "Extract the following times separately and adjust their AM/PM logically if needed. Follow these principles:\n"
-        "1. **Relative Consistency:** If two times appear in the same context (e.g., order time and delivery time), ensure their relationship makes sense (e.g., delivery cannot be before ordering).\n"
-        "2. **24-Hour Clues:** If any time is in 24-hour format (e.g., '20:45'), assume other times nearby should align (e.g., '8:17' becomes '20:17').\n"
-        "3. **AM/PM Priority:** If AM/PM labels exist (e.g., '8:17 PM'), trust them. If missing, infer based on activity (e.g., '9:00' with 'Evening Delivery' text → PM).\n"
-        "Return in this exact format:\n"
-        "Order placement time: [time with AM/PM]\n"
-        "Delivery window: [earliest time with AM/PM] - [latest time with AM/PM]"
-    ])
+    response = client.models.generate_content(
+        model="gemini-2.5-flash-lite",
+        contents=[
+            img,
+            "Extract the following times separately and adjust their AM/PM logically if needed. Follow these principles:\n"
+            "1. **Relative Consistency:** If two times appear in the same context (e.g., order time and delivery time), ensure their relationship makes sense (e.g., delivery cannot be before ordering).\n"
+            "2. **24-Hour Clues:** If any time is in 24-hour format (e.g., '20:45'), assume other times nearby should align (e.g., '8:17' becomes '20:17').\n"
+            "3. **AM/PM Priority:** If AM/PM labels exist (e.g., '8:17 PM'), trust them. If missing, infer based on activity (e.g., '9:00' with 'Evening Delivery' text → PM).\n"
+            "Return in this exact format:\n"
+            "Order placement time: [time with AM/PM]\n"
+            "Delivery window: [earliest time with AM/PM] - [latest time with AM/PM]"
+        ]
+    )
     
     print("Raw Gemini response:", response.text)
     
@@ -174,11 +179,14 @@ def extract_initial_times(img):
 
 def extract_completion_time(img):
     """Extract order completion time"""
-    response = model.generate_content([
-        img,
-        "Extract when the order was delivered/completed. "
-        "Return just the time in its original format."
-    ])
+    response = client.models.generate_content(
+        model="gemini-2.5-flash-lite",
+        contents=[
+            img,
+            "Extract when the order was delivered/completed. "
+            "Return just the time in its original format."
+        ]
+    )    
     
     timestamps = process_gemini_response(response.text)
     if timestamps:
@@ -326,13 +334,18 @@ if __name__ == "__main__":
     if info:
         print(f"Gemini extracted :\n{info}")
 
-        timestamps = process_gemini_response(info)
+        # timestamps = process_gemini_response(info)
 
-        if timestamps:
-            print("\nExtracted Timestamps:")
-            for label, timestamp in timestamps.items():
-                print(f"{label}: {timestamp}")
-        else:
-            print("No valid timestamps could be extracted.")
+        # if timestamps:
+        #     print("\nExtracted Timestamps:")
+        #     for label, timestamp in timestamps.items():
+        #         print(f"{label}: {timestamp}")
+        # else:
+        #     print("No valid timestamps could be extracted.")
+    
+        print("\nExtracted Timestamps from final info:")
+        print(f"Order Completion Time (Unix): {info.get('order_completion_time')}")
+        
+
     else:
         print("Failed to generate image description.")
