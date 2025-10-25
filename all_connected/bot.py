@@ -179,11 +179,6 @@ def update_order_by_id(order_id, updates):
             existing_columns = {col['Field'] for col in cursor.fetchall()}
             
             valid_updates = {k: v for k, v in updates.items() if k in existing_columns} 
-
-            for key, value in valid_updates.items():
-                print(f"key: {key}, value: {value}, key type: {type(key)}, value type: {type(value)}")
-                if isinstance(value, dict):
-                    print(f"found dict value: {key} = {value}")
             
             if not valid_updates:
                 return False
