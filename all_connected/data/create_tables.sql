@@ -1,6 +1,6 @@
 /*
-Author: Amelia Zhang, based on work from Amy Fung & Cynthia Wang & Sofia Kobayashi & Helen Mao
-Date: 03/28/2025
+Author: Victoria Li, based on work from Amy Fung & Cynthia Wang & Sofia Kobayashi & Helen Mao & Amelia Zhang
+Date: 10/13/2025
 Description: Updated to store all timestamps as Unix timestamps (integers)
 */
 
@@ -43,10 +43,9 @@ CREATE TABLE IF NOT EXISTS orders (
     -- Order info
     order_id INT AUTO_INCREMENT,
     user_id VARCHAR(50),
-    channel_id VARCHAR(50), -- current timestamp. one order is associated with one channel
+    start_submission_timestamp INT,
+    end_submission_timestamp INT,
     app_used VARCHAR(20),
-    channel_creation_time INT,
-    channel_completion_time INT,
     status ENUM(
         'awaiting_app_selection',
         'awaiting_initial_screenshot',
@@ -78,8 +77,23 @@ CREATE TABLE IF NOT EXISTS orders (
     placement_screenshot_path VARCHAR(300),
     completion_screenshot_path VARCHAR(300),
 
+    -- Auto-verification variables
+    gemini_restaurant_name VARCHAR(100),
+    gemini_order_placement_time INT,
+    gemini_earliest_estimated_arrival_time INT,
+    gemini_latest_estimated_arrival_time INT,
+    gemini_order_completion_time INT,
+    gemini_restaurant_address VARCHAR(100),
+   
+    ocr_restaurant_name VARCHAR(100),
+    ocr_order_placement_time INT,
+    ocr_earliest_estimated_arrival_time INT,
+    ocr_latest_estimated_arrival_time INT,
+    ocr_order_completion_time INT,
+    ocr_restaurant_address VARCHAR(100),
+   
+    auto_verified_fields JSON,
     PRIMARY KEY (order_id),
-    UNIQUE KEY (channel_id), 
     FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE SET NULL
 )
 ENGINE = InnoDB;

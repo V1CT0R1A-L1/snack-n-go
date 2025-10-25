@@ -1,5 +1,5 @@
 """
-Author: Victoria Lee, based on work from Amy Fung & Cynthia Wang & Sofia Kobayashi & Helen Mao
+Author: Victoria Li, based on work from Amy Fung & Cynthia Wang & Sofia Kobayashi & Helen Mao
 Date: 03/29/2025
 Description: The main Slack bot logic for the food delivery data collection project
 """
@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 import json
 import requests
+import pymysql
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_bolt import App
@@ -20,6 +21,7 @@ import messenger
 import re
 import certifi
 from datetime import datetime
+from auto_verification import process_screenshot_with_auto_verify
 
 
 
@@ -59,7 +61,7 @@ ORDER_STAGES = {
     },
     'awaiting_initial_screenshot': {
         'next': 'verifying_initial_data',
-        'prompt': None,
+        'prompt': "Please upload your *order submission screenshot* now. This should include the current time, restaurant name, and estimated delivery time.",
         'actions': ['file_upload']
     },
     'verifying_initial_data': {
@@ -152,62 +154,57 @@ def db_operation(query, params=None, fetch_one=False, fetch_all=False):
             elif fetch_all:
                 result = cursor.fetchall()
             else:
-                result = None  # For operations that don't return results (INSERT/UPDATE)
+                result = None
             conn.commit()
             return result
     except Exception as e:
-        print(f"Database error: {e}")
+        print(f"Database error in db_operation: {e}")
+        import traceback
+        print(f"Full traceback: {traceback.format_exc()}")
         return None
     finally:
         if conn:
             conn.close()
 
-def get_order_info(channel_id):
-    """Get order information by channel ID"""
-    return db_operation(
-        "SELECT * FROM orders WHERE channel_id = %s",
-        (channel_id,),
-        fetch_one=True
-    )
-
-def get_order_channel(body):
-    """Helper to get the order channel from any interaction"""
-    channel_id = body["container"]["channel_id"]
-    order = get_order_info(channel_id)
-    return order["channel_id"] if order else channel_id
-
-def update_order(channel_id, updates):
-    """Update order fields with column existence check"""
+def update_order_by_id(order_id, updates):
+    """Update order fields with column existence check using order_id"""
     if not updates:
         return False
         
     # Get existing columns
     conn = connectDB(DB_NAME)
     try:
-        with conn.cursor() as cursor:
+        with conn.cursor(pymysql.cursors.DictCursor) as cursor:
             cursor.execute("SHOW COLUMNS FROM orders")
-            existing_columns = {col[0] for col in cursor.fetchall()}
+            existing_columns = {col['Field'] for col in cursor.fetchall()}
             
-            # Filter updates to only include existing columns
-            valid_updates = {k: v for k, v in updates.items() if k in existing_columns}
+            valid_updates = {k: v for k, v in updates.items() if k in existing_columns} 
+
+            for key, value in valid_updates.items():
+                print(f"key: {key}, value: {value}, key type: {type(key)}, value type: {type(value)}")
+                if isinstance(value, dict):
+                    print(f"found dict value: {key} = {value}")
             
             if not valid_updates:
                 return False
                 
             set_clause = ", ".join([f"{k} = %s" for k in valid_updates])
-            query = f"UPDATE orders SET {set_clause} WHERE channel_id = %s"
-            params = list(valid_updates.values()) + [channel_id]
+            
+            query = f"UPDATE orders SET {set_clause} WHERE order_id = %s" 
+            
+            params = tuple(valid_updates.values()) + (order_id,) 
+            
             cursor.execute(query, params)
             conn.commit()
             return cursor.rowcount > 0
     except Exception as e:
-        print(f"Database error in update_order: {e}")
+        print(f"Database error in update_order_by_id: {e}") 
         return False
     finally:
         if conn:
             conn.close()
 
-def create_order(user_id, channel_id):
+def create_order_in_DB(user_id):
     """Create a new order record with Unix timestamps"""
     conn = None
     try:
@@ -216,9 +213,9 @@ def create_order(user_id, channel_id):
             # Modified query for MySQL compatibility
             cursor.execute(
                 """INSERT INTO orders 
-                   (user_id, channel_id, status, channel_creation_time) 
-                   VALUES (%s, %s, 'awaiting_app_selection', %s)""",
-                (user_id, channel_id, get_current_unix_time())
+                   (user_id, start_submission_timestamp, status) 
+                   VALUES (%s, %s, 'awaiting_app_selection')""",
+                (user_id, get_current_unix_time())
             )
             order_id = cursor.lastrowid  # Get the auto-incremented ID
             conn.commit()
@@ -230,29 +227,23 @@ def create_order(user_id, channel_id):
         if conn:
             conn.close()
 
-def create_channel(user_id):
-    """Create a new private channel for an order"""
-    try:
-        # Create channel
-        channel_name = f"order-{get_current_unix_time()}"
-        response = client.conversations_create(name=channel_name, is_private=True)
-        channel_id = response["channel"]["id"]
-        
-        # Create order record
-        order_id = create_order(user_id, channel_id)
-        if not order_id:
-            raise Exception("Failed to create order record")
-            
-        # Invite user
-        client.conversations_invite(channel=channel_id, users=[user_id])
-        return order_id, channel_id
-        
-    except SlackApiError as e:
-        print(f"Error creating channel: {e.response['error']}")
-        return None, None
-
-def get_next_unverified_field(order):
+def get_next_unverified_field(order, skip_auto_verified=False):
     """Determine which field to verify next - only returns fields with actual values"""
+    print(f"--- GET NEXT UNVERIFIED FIELD DEBUG ---")
+    print(f"Order ID: {order.get('order_id')}")
+    print(f"Skip auto-verified: {skip_auto_verified}")
+   
+    # Get auto-verified fields if skipping is enabled
+    auto_verified_fields = set()
+    if skip_auto_verified:
+        auto_verified_json = order.get('auto_verified_fields')
+        if auto_verified_json:
+            try:
+                auto_verified_fields = set(json.loads(auto_verified_json))
+                print(f"Auto-verified fields to skip: {auto_verified_fields}")
+            except json.JSONDecodeError:
+                print("Failed to parse auto_verified_fields JSON")
+
     verification_order = [
         ('restaurant_name', 'is_restaurant_name_verified'),
         ('order_placement_time', 'is_order_placement_time_verified'),
@@ -261,11 +252,22 @@ def get_next_unverified_field(order):
         ('order_completion_time', 'is_order_completion_time_verified'),
         ('restaurant_address', 'is_restaurant_address_verified')
     ]
-    
+   
     for field, verification_flag in verification_order:
-        # Only return if field has a value AND isn't verified yet
-        if order.get(field) is not None and not order.get(verification_flag, False):
+        if skip_auto_verified and field in auto_verified_fields:
+            print(f"Skipping auto-verified field: {field}")
+            continue
+           
+        field_value = order.get(field)
+        is_verified = order.get(verification_flag, False)
+       
+        print(f"Checking field: {field}, value: {field_value}, verified: {is_verified}")
+       
+        if field_value is not None and not is_verified:
+            print(f"Found next field: {field}, verification_flag: {verification_flag}")
             return field, verification_flag
+   
+    print("No unverified fields found")
     return None, None
 
 def format_field_for_display(field_name, value):
@@ -361,13 +363,39 @@ def process_image(channel_id, file):
         )
         return
 
-    order = get_order_info(channel_id)
+    user_id = None
+    try:
+        channel_info = client.conversations_info(channel=channel_id)['channel']
+        
+        if channel_info.get('is_im'):
+            if 'user' in file: 
+                user_id = file['user'] 
+            else:
+                response = client.conversations_members(channel=channel_id)
+                members = response['members']
+                user_id = next((m for m in members if m != BOT_ID), None)
+            
+            if not user_id:
+                raise Exception("Could not find user_id from DM channel members.")
+
+        else:
+            raise Exception("Channel is not a DM (IM) channel.") 
+
+    except Exception as e:
+        print(f"Error determining user_id from DM: {e}")
+        client.chat_postMessage(channel=channel_id, text="Error: Could not determine the active user.")
+        return
+
+    order = get_last_active_order_by_user(user_id) 
+
     if not order:
         client.chat_postMessage(
             channel=channel_id,
-            text="Order not found"
+            text="No active order found for you. Please start a new submission."
         )
         return
+    
+    order_id = order['order_id']
     
     try:
         # Get file info
@@ -405,31 +433,54 @@ def process_image(channel_id, file):
             f.write(response.content)
         
         # Process the image
-        extracted = gemini_process_image(filepath, image_stage)
-        print(extracted)
-        
-        updates = {
-            'status': 'verifying_initial_data' if stage == 'placement' else 'verifying_completion_data'
-        }
-        
-        if stage == 'placement':
-            updates.update({
-                'placement_screenshot_path': filepath,
-                'restaurant_name': extracted.get('restaurant_name'),
-                'order_placement_time': extracted.get('order_placement_time'),
-                'earliest_estimated_arrival_time': extracted.get('earliest_estimated_arrival_time'),
-                'latest_estimated_arrival_time': extracted.get('latest_estimated_arrival_time')
-            })
-        else:
-            updates.update({
-                'completion_screenshot_path': filepath,
-                'order_completion_time': extracted.get('order_completion_time')
-            })
-        
-        if update_order(channel_id, updates):
-            start_field_verification(channel_id, client)
-        else:
-            raise Exception("Failed to update order in database")
+        print(f"[AUTO_VERIFICATION] Starting auto-verification for order {order_id}")
+        result = process_screenshot_with_auto_verify(filepath, image_stage, order_id, db_operation)
+
+        if update_order_by_id(order_id, result['updates']):
+           
+            if not result['needs_manual_verification']:
+                # All fields auto-verified! Skip manual verification
+                print(f"[AUTO_VERIFICATION] All fields auto-verified for order {order_id}")
+                client.chat_postMessage(
+                    channel=channel_id,
+                    text="✅ All information automatically verified! Moving to next step.",
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": f"✅ *Automatic Verification Complete!*\n\nAll {result['auto_verified_count']} fields were automatically verified. Moving to the next step."
+                            }
+                        }
+                    ]
+                )
+                # Move to next stage directly
+                updated_order = get_last_active_order_by_user(user_id)
+                handle_stage_completion(updated_order, channel_id, client)
+               
+            else:
+                # Some fields need manual verification
+                print(f"[AUTO_VERIFICATION] {result['auto_verified_count']}/{result['total_expected_fields']} fields auto-verified, need manual verification")
+               
+                if result['auto_verified_count'] > 0:
+                    # Show which fields were auto-verified
+                    auto_verified_fields = json.loads(result['updates'].get('auto_verified_fields', '[]'))
+                    client.chat_postMessage(
+                        channel=channel_id,
+                        text=f"✅ {result['auto_verified_count']} fields auto-verified, {result['total_expected_fields'] - result['auto_verified_count']} need manual confirmation",
+                        blocks=[
+                            {
+                                "type": "section",
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": f"✅ *Partial Auto-Verification Complete!*\n\n{result['auto_verified_count']} out of {result['total_expected_fields']} fields were automatically verified. Please verify the remaining information."
+                                }
+                            }
+                        ]
+                    )
+               
+                # Start manual verification for remaining fields
+                start_field_verification(order_id, channel_id, client)
             
     except Exception as e:
         error_msg = f"Error processing image: {str(e)}"
@@ -439,12 +490,17 @@ def process_image(channel_id, file):
             text=error_msg
         )
 
-def start_field_verification(channel_id, client):
+def start_field_verification(order_id, channel_id, client):
     # Get the current order information
-    order = get_order_info(channel_id)
+    order = db_operation("SELECT * FROM orders WHERE order_id = %s", (order_id,), fetch_one=True)
+
+    print(f"[FIELD VERIFICATION] Starting verification for order {order_id}")
+    print(f"Order status: {order.get('status')}")
+   
+
     if not order:
         client.chat_postMessage(
-            channel=order['channel_id'],
+            channel=channel_id,
             text="No active order", 
             blocks=[{
                     "type": "section",
@@ -458,73 +514,95 @@ def start_field_verification(channel_id, client):
         )
         return
     
-    # Determine which field needs verification next
-    field, verification_flag = get_next_unverified_field(order)
-    
+    # Check if there are auto-verified fields
+    auto_verified_json = order.get('auto_verified_fields')
+    auto_verified_fields = json.loads(auto_verified_json) if auto_verified_json else []
+   
+    if auto_verified_fields:
+        print(f"[FIELD VERIFICATION] Auto-verified fields: {auto_verified_fields}")
+   
+    # Determine which field needs verification next (skip auto-verified ones)
+    field, verification_flag = get_next_unverified_field(order, skip_auto_verified=True)
+    print(f"Next field to verify: {field}, Verification flag: {verification_flag}")
+   
     if not field:
         # All fields verified - move to next stage
-        handle_stage_completion(order, client)
+        print(f"[FIELD VERIFICATION] All fields verified for order {order_id}")
+        handle_stage_completion(order, channel_id, client)
         return
-    
+   
     # Get current value of the field
     field_value = order.get(field)
-    
+    print(f"Field value: {field_value}, Type: {type(field_value)}")
+
+    blocks = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f"*{field.replace('_', ' ').title()}*: "
+                    f"{format_field_for_display(field, field_value)}\n"
+                    "Is this correct?"
+                )
+            }
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "✅ Yes"},
+                    "action_id": "verify_field_yes",
+                    "value": f"{field}|{verification_flag}",
+                    "style": "primary"
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "✏️ No"},
+                    "action_id": "verify_field_no",
+                    "value": field
+                }
+            ]
+        }
+    ]
+   
     # Send verification prompt
     client.chat_postMessage(
         channel=channel_id,
-        text='send verification prompt', 
-        blocks={{
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": (
-                            f"*{field.replace('_', ' ').title()}*: "
-                            f"{format_field_for_display(field, field_value)}\n"
-                            "Is this correct?"
-                        )
-                    }
-                },
-                {
-                    "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": "✅ Yes"},
-                            "action_id": "verify_field_yes",
-                            "value": f"{field}|{verification_flag}",
-                            "style": "primary"
-                        },
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": "✏️ No"},
-                            "action_id": "verify_field_no",
-                            "value": field
-                        }
-                    ]
-                }
-            }
+        text=f'Verification prompt for {field}',
+        blocks=blocks
     )
 
-def handle_stage_completion(order, client):
+def handle_stage_completion(order, channel_id, client):
     """
     Handles the completion of a verification stage and moves to the next stage.
     """
-    channel_id = order['channel_id']
     current_stage = order['status']
     next_stage = ORDER_STAGES.get(current_stage, {}).get('next')
-    
+   
     print(f"[STAGE CHANGE] Channel {channel_id} moving from {current_stage} to {next_stage}", datetime.now())
 
     if not next_stage:
+        # Show completion message with auto-verification stats
+        auto_verified_json = order.get('auto_verified_fields')
+        auto_verified_count = len(json.loads(auto_verified_json)) if auto_verified_json else 0
+       
+        completion_text = "🎉 *Thank you!* Your order submission is complete."
+        if auto_verified_count > 0:
+            completion_text += f"\n\n🤖 *Auto-verification Stats:* {auto_verified_count} fields were automatically verified!"
+       
+        completion_text += "\n\nFor future reference, you can review the instructions here:\n<https://docs.google.com/document/d/1JOXu2Qwi_I5X__FwH6g0dlyMh-QxqCFeLo3s5l5ImjI/edit?usp=sharing | order submission instructions document>"
+       
         client.chat_postMessage(
             channel=channel_id,
-            text="Thank you! Submission complete. ",
+            text="Thank you! Submission complete.",
             blocks=[
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": "🎉 *Thank you!* Your order submission is complete.\n\nFor future reference, you can review the instructions here:\n<https://docs.google.com/document/d/1JOXu2Qwi_I5X__FwH6g0dlyMh-QxqCFeLo3s5l5ImjI/edit?usp=sharing | order submission instructions document>"
+                        "text": completion_text
                     }
                 }
             ]
@@ -532,7 +610,7 @@ def handle_stage_completion(order, client):
         return
     
     # Update to next stage
-    if update_order(order['channel_id'], {'status': next_stage}):
+    if update_order_by_id(order['order_id'], {'status': next_stage}): 
         # Show progress indicator with the new stage
         next_prompt = ORDER_STAGES.get(next_stage, {}).get('prompt')
         if next_prompt:
@@ -550,7 +628,8 @@ def handle_stage_completion(order, client):
         
         # Special handling for certain stage transitions
         if next_stage == 'collecting_missing_info':
-            check_for_missing_info(order['channel_id'], client)
+            order_id = order['order_id']
+            check_for_missing_info(order_id, channel_id, client) 
 
 def get_button_style(action_id, is_disabled=False):
     """Helper to get button style based on action_id"""
@@ -597,6 +676,92 @@ def update_message_after_action(client, channel_id, ts, original_blocks, decisio
         blocks=new_blocks
     )
 
+def get_last_active_order_by_user(user_id):
+    """
+    Get the most recent active order for a user.
+    'Active' = any status other than 'completed' or 'rejected'.
+    """
+    return db_operation(
+        """
+        SELECT * FROM orders 
+        WHERE user_id = %s 
+        AND status NOT IN ('completed', 'rejected')
+        ORDER BY order_id DESC 
+        LIMIT 1
+        """,
+        (user_id,),
+        fetch_one=True
+    )
+
+def check_for_missing_info(order_id, channel_id, client):
+    """Check if any required fields are missing and prompt for them"""
+    order = db_operation("SELECT * FROM orders WHERE order_id = %s", (order_id,), fetch_one=True)
+    if not order:
+        return client.chat_postMessage(
+            channel=channel_id, 
+            text = "Order not found"
+        )
+    
+    required_fields = [
+        ('restaurant_name', 'is_restaurant_name_verified'),
+        ('order_placement_time', 'is_order_placement_time_verified'),
+        ('earliest_estimated_arrival_time', 'is_earliest_estimated_arrival_time_verified'),
+        ('latest_estimated_arrival_time', 'is_latest_estimated_arrival_time_verified'),
+        ('order_completion_time', 'is_order_completion_time_verified')
+    ]
+    
+    missing_fields = [
+        field for field, flag in required_fields 
+        if not order.get(field) and not order.get(flag)
+    ]
+    
+    if missing_fields:
+        client.chat_postMessage(
+            channel=channel_id, 
+            text = "We're missing some information:"
+        )
+        for field in missing_fields:
+            send_input_prompt(channel_id, field, is_missing=True, client=client)
+    else:
+        # No missing info, complete the order
+        if update_order_by_id(order_id, {'status': 'completed'}):
+            client.chat_postMessage(
+                channel=channel_id, 
+                text = "Thank you! Your order submission is complete.",
+                blocks = [
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": "Thank you for submitting your screenshots and verifying the times on those screenshots! Your order submission is now complete. You\'ve finished everything required on your end, and we\'ll take it from here."
+                            }
+                        }, 
+                        {
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn",
+                                "text": "If you encounter a bug, typo, or other error at any point in the order submission process or other issues, feel free to fill out this <https://docs.google.com/forms/d/e/1FAIpQLSe7U05qgO7AUrkEcH4brPSnPAsvjgfcE3kEhOrg1b8ZoNPWdA/viewform?usp=sharing | form>!"
+                            }
+                        }
+                ]
+            )
+
+def send_welcome_message(users_list) -> None:
+    '''
+    Takes   A list containing all user ids or a dictionary with user ids as its keys. 
+            currently using users_store returned by get_all_users_info()
+    Sends welcoming message to all users
+    '''
+    active_users = messenger.get_active_users_list()
+    for user_id in users_list:
+        if BOT_ID != user_id and user_id in active_users:      
+            try:
+                print(f'IN Welcome: {user_id}', datetime.now())
+                client.chat_postMessage(channel=f"@{user_id}", blocks = MESSAGE_BLOCKS["main_channel_welcome_message"]['blocks'], text="Welcome to Snack N Go!")
+                print("Welcome!")
+            except SlackApiError as e:
+                assert e.response["ok"] is False and e.response["error"], f"Got an error: {e.response['error']}"
+
 ### MESSAGE HANDLERS ###
 @app.event("file_created")
 def handle_file_created_events(body, logger):
@@ -605,7 +770,6 @@ def handle_file_created_events(body, logger):
 @app.event("message")
 def handle_message(payload, say):
     """Handle text messages and messages with files"""
-    print(json.dumps(payload, indent=2))
 
     channel_id = payload.get('channel')
     user_id = payload.get('user')
@@ -626,52 +790,24 @@ def handle_message(payload, say):
             blocks=MESSAGE_BLOCKS["main_channel_welcome_message"]['blocks'])
         return
     if 'files' in payload:
-        print(f"[FILE UPLOAD] User {user_id} uploaded {len(payload['files'])} files",  datetime.now())
-        if len(payload['files']) > 1:
-            say("Please upload only one file at a time.")
+        if text == '': 
+            print("[FILE UPLOAD] Detected file with empty message text. Skipping to avoid duplication.")
             return
-        file = payload['files'][0]
-        if "image" not in file['mimetype']:
-            say(text="Please upload an image file. ", 
-                blocks=[{
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": "⚠️ *Please upload an image file*\nWe need a screenshot to process your order. Only JPG, JPEG, or PNG files are accepted."
-                }
-            }])
-            return
-        process_image(channel_id, file)
+        return
     else:
         say()
-
-def send_messages(channel_id, block=None, text=None):
-    messenger.send_message(channel_id, block, text)
-
-def send_welcome_message(users_list) -> None:
-    '''
-    Takes   A list containing all user ids or a dictionary with user ids as its keys. 
-            currently using users_store returned by get_all_users_info()
-    Sends welcoming message to all users
-    '''
-    active_users = messenger.get_active_users_list()
-    for user_id in users_list:
-        if BOT_ID != user_id and user_id in active_users:      
-            try:
-                print(f'IN Welcome: {user_id}', datetime.now())
-                client.chat_postMessage(channel=f"@{user_id}", blocks = MESSAGE_BLOCKS["main_channel_welcome_message"]['blocks'], text="Welcome to Snack N Go!")
-                print("Welcome!")
-            except SlackApiError as e:
-                assert e.response["ok"] is False and e.response["error"], f"Got an error: {e.response['error']}"
 
 @app.action("process_input")
 def handle_user_input(ack, body, say, logger, client):
     ack()
     user_id=body["user"]["id"]
-    print("\n=== FULL PAYLOAD ===")
-    print(json.dumps(body, indent=2, default=str))
+    order = get_last_active_order_by_user(user_id)
+    if not order:
+        say(channel=body["container"]["channel_id"], text="⚠️ Error: No active order found to update.")
+        return
+    order_id = order['order_id']
+    channel_id = body["container"]["channel_id"] 
     try:
-        channel_id = body["container"]["channel_id"]
         state_values = body["state"]["values"]
         value = None
         field = None
@@ -707,11 +843,11 @@ def handle_user_input(ack, body, say, logger, client):
             if "missing_" in block_id:
                 updates[f"is_{field}_verified"] = True
 
-            if update_order(channel_id, updates):
+            if update_order_by_id(order_id, updates): 
                 if "missing_" in block_id:
-                    check_for_missing_info(channel_id, client)
+                    check_for_missing_info(order_id, channel_id, client) 
                 else:
-                    start_field_verification(channel_id, client)
+                    start_field_verification(order_id, channel_id, client) 
 
         except Exception as e:
             print(f"Update error: {e}")
@@ -726,7 +862,7 @@ def handle_file_shared_events(body, logger):
     logger.info("File shared event received")
     file_id = body["event"]["file_id"]
     channel_id = body["event"]["channel_id"]
-    user_id = body["event"]["user"]["id"]
+    user_id = body["event"]["user_id"]
 
     print(f"[FILE SHARED] User {user_id} shared file in channel {channel_id}", datetime.now())
     
@@ -775,12 +911,26 @@ def handle_start_order_submission(ack, body, say):
     """Start new order submission flow"""
     ack()
     user_id = body["user"]["id"]
-    order_id, channel_id = create_channel(user_id)
+    order_id = create_order_in_DB(user_id)
     print(f"[ORDER STARTED] User {user_id} started new order submission at {datetime.now()}") 
 
-    if order_id and channel_id:
+    if order_id:
+        try:
+            response = client.conversations_open(users=[user_id])
+            dm_channel_id = response["channel"]["id"]
+            channel_to_post = dm_channel_id 
+        except SlackApiError as e:
+            print(f"Failed to open DM channel: {e.response['error']}")
+            say("Failed to start order submission due to a Slack issue.") 
+            return
+        
         client.chat_postMessage(
-            channel=channel_id,
+            channel=channel_to_post,
+            text=f"You've started an order submission! Send 'help' or '?' to end submission.",
+        )
+        
+        client.chat_postMessage(
+            channel=channel_to_post,
             text = 'Which of the following delivery apps do you use?', 
             blocks=[{
                 "type": "section",
@@ -795,35 +945,38 @@ def handle_start_order_submission(ack, body, say):
                         "type": "button",
                         "text": {"type": "plain_text", "text": "Uber Eats"},
                         "action_id": "select_app_uber",
-                        "value": "uber"
+                        "value": f"uber__{order_id}"
                     },
                     {
                         "type": "button",
                         "text": {"type": "plain_text", "text": "DoorDash"},
                         "action_id": "select_app_doordash",
-                        "value": "doordash" 
+                        "value": f"doordash__{order_id}"
                     },
                     {
                         "type": "button",
                         "text": {"type": "plain_text", "text": "Grubhub"},
                         "action_id": "select_app_grubhub",
-                        "value": "grubhub"
+                        "value": f"grubhub__{order_id}"
                     }
                 ]
             }]
         )
-        say(f"Created private channel for your order: <#{channel_id}>")
     else:
-        print("Failed to create order channel")
-        say("Failed to create order channel.")
+        print("Failed to start a new order submission. ")
+        say("Failed to start a new order submission. ")
 
-@app.action("select_app_uber")
+@app.action(re.compile(r"select_app_.+"))
 def handle_app_selection(ack, body, say):
     """Handle delivery app selection"""
     ack()
-    channel_id = get_order_channel(body)
-    app_used = "uber"
-    ts = body["container"]["message_ts"]  # Get the timestamp of the original message
+
+    channel_id = body["container"]["channel_id"] 
+    ts = body["container"]["message_ts"]
+
+    action_value = body["actions"][0]["value"]
+    app_used, order_id_str = action_value.split("__")
+    order_id = int(order_id_str)
     
     # Create a friendly name for display
     app_display_names = {
@@ -831,34 +984,37 @@ def handle_app_selection(ack, body, say):
         "doordash": "DoorDash",
         "grubhub": "Grubhub"
     }
-    app_display_name = app_display_names.get(app_used, app_used.capitalize())
+    app_display_name = app_display_names.get(app_used)
     
     # Update the original message to show selection
-    client.chat_update(
-        channel=channel_id,
-        ts=ts,
-        blocks=[
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn", 
-                    "text": f"*Order App Selected*\nGreat! You picked *{app_display_name}*. Now, we will move on to submitting your screenshots!"
+    try:
+        client.chat_update(
+            channel=channel_id,
+            ts=ts,
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn", 
+                        "text": f"*Order App Selected*\nGreat! You picked *{app_display_name}*. Now, we will move on to submitting your screenshots!"
+                    }
+                }, 
+                {
+                    "type": "section", 
+                    "text": {
+                        "type": "mrkdwn", 
+                        "text": f"The first screenshot you need to upload is the *order submission* screenshot. This is usually taken right after you make an order through {app_display_name} and includes information about the *current time*⏱︎ , *restaurant name*🍽️, and *estimated delivery time/window*🪟. Please give snack\'n\'go a few seconds to process your image before we proceed to the next step 🙂"
+                    }
                 }
-            }, 
-            {
-                "type": "section", 
-                "text": {
-                    "type": "mrkdwn", 
-                    "text": f"The first screenshot you need to upload is the *order submission* screenshot. This is usually taken right after you make an order through {app_display_name} and includes information about the *current time*⏱︎ , *restaurant name*🍽️, and *estimated delivery time/window*🪟. Please give snack\'n\'go a few seconds to process your image before we proceed to the next step 🙂"
-                }
-            }
-        ],
-        text=f"You selected {app_display_name}"
-    )
-    
-    # Update the database and proceed to the next step
-    if update_order(channel_id, {"app_used": app_used, "status": "awaiting_initial_screenshot"}):
-        # Send a new message for the next step
+            ],
+            text=f"You selected {app_display_name}"
+        )
+    except SlackApiError as e:
+        print(f"Failed to update message: {e.response['error']}")
+        # Post a new message if update fails
+        say(channel=channel_id, text=f"I tried to update the message but failed. You selected {app_display_name}. Proceeding to the next step.")
+
+    if update_order_by_id(order_id, {"app_used": app_used, "status": "awaiting_initial_screenshot"}):
         client.chat_postMessage(
             channel=channel_id,
             text=ORDER_STAGES['awaiting_initial_screenshot']['prompt'],
@@ -872,105 +1028,10 @@ def handle_app_selection(ack, body, say):
                 }
             ]
         )
-
-@app.action("select_app_doordash")
-def handle_app_selection(ack, body, say):
-    """Handle delivery app selection"""
-    ack()
-    channel_id = get_order_channel(body)
-    app_used = "doordash"
-    ts = body["container"]["message_ts"]  # Get the timestamp of the original message
+        pass
+    else:
+        client.chat_postMessage(channel=channel_id, text=f"⚠️ Internal error: Failed to update Order #{order_id} in the database.")
     
-    # Create a friendly name for display
-    app_display_names = {
-        "uber": "Uber Eats",
-        "doordash": "DoorDash",
-        "grubhub": "Grubhub"
-    }
-    app_display_name = app_display_names.get(app_used, app_used.capitalize())
-    
-    # Update the original message to show selection
-    client.chat_update(
-        channel=channel_id,
-        ts=ts,
-        blocks=[
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn", 
-                    "text": f"*Order App Selected*\nYou selected: *{app_display_name}*"
-                }
-            }
-        ],
-        text=f"You selected {app_display_name}"
-    )
-    
-    # Update the database and proceed to the next step
-    if update_order(channel_id, {"app_used": app_used, "status": "awaiting_initial_screenshot"}):
-        # Send a new message for the next step
-        client.chat_postMessage(
-            channel=channel_id,
-            text=ORDER_STAGES['awaiting_initial_screenshot']['prompt'],
-            blocks=[
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": ORDER_STAGES['awaiting_initial_screenshot']['prompt']
-                    }
-                }
-            ]
-        )
-
-@app.action("select_app_grubhub")
-def handle_app_selection(ack, body, say):
-    """Handle delivery app selection"""
-    ack()
-    channel_id = get_order_channel(body)
-    app_used = "grubhub"
-    ts = body["container"]["message_ts"]  # Get the timestamp of the original message
-    
-    # Create a friendly name for display
-    app_display_names = {
-        "uber": "Uber Eats",
-        "doordash": "DoorDash",
-        "grubhub": "Grubhub"
-    }
-    app_display_name = app_display_names.get(app_used, app_used.capitalize())
-    
-    # Update the original message to show selection
-    client.chat_update(
-        channel=channel_id,
-        ts=ts,
-        blocks=[
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn", 
-                    "text": f"*Order App Selected*\nYou selected: *{app_display_name}*"
-                }
-            }
-        ],
-        text=f"You selected {app_display_name}"
-    )
-    
-    # Update the database and proceed to the next step
-    if update_order(channel_id, {"app_used": app_used, "status": "awaiting_initial_screenshot"}):
-        # Send a new message for the next step
-        client.chat_postMessage(
-            channel=channel_id,
-            text=ORDER_STAGES['awaiting_initial_screenshot']['prompt'],
-            blocks=[
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": ORDER_STAGES['awaiting_initial_screenshot']['prompt']
-                    }
-                }
-            ]
-        )
-
 @app.action("verify_field_yes")
 def handle_verification_yes(ack, body, say):
     ack()
@@ -979,7 +1040,13 @@ def handle_verification_yes(ack, body, say):
     field = body["actions"][0]["value"].split("|")[0]
     user_id = body["user"]["id"]
 
-    print(f"[VERIFICATION] User {user_id} confirmed field {field} in channel {channel_id}", datetime.now())
+    order = get_last_active_order_by_user(user_id)
+    if not order:
+        client.chat_postMessage(channel=channel_id, text="⚠️ Error: No active order found to update.")
+        return
+    order_id = order['order_id']
+
+    print(f"[VERIFICATION] User {user_id} confirmed field {field} in order {order_id}", datetime.now())
     
     # Update message to show decision
     update_message_after_action(
@@ -992,8 +1059,10 @@ def handle_verification_yes(ack, body, say):
 
     field, verification_flag = body["actions"][0]["value"].split("|")
     
-    if update_order(channel_id, {verification_flag: True}):
-        start_field_verification(channel_id, client)
+    if update_order_by_id(order_id, {verification_flag: True}):
+        start_field_verification(order_id, channel_id, client) 
+    else:
+        client.chat_postMessage(channel=channel_id, text=f"⚠️ Internal error: Failed to update Order #{order_id} in the database.")
 
 @app.action("verify_field_no")
 def handle_verification_no(ack, body, client):
@@ -1013,7 +1082,8 @@ def handle_check_account_status(ack, body, say):
     """Show user their account status and history"""
     ack()
     user_id = body["user"]["id"]
-    
+    channel_id = body["container"]["channel_id"] 
+
     try:
         # Get user data from database
         user_data = db_operation(
@@ -1089,133 +1159,13 @@ def handle_check_account_status(ack, body, say):
 {orders_history}
             """
             
-            say(message.strip())
+            client.chat_postMessage(channel=channel_id, text=message.strip())
         else:
             say("No account information found. ")
             
     except Exception as e:
-        say("Sorry, I couldn't retrieve your account information. ")
+        client.chat_postMessage(channel=channel_id, text="No account information found.")
         print(f"Error getting account status: {e}")
-
-def start_field_verification(channel_id, client):
-    """
-    Starts or continues the verification process for order fields.
-    Checks which fields need verification and prompts the user accordingly.
-    
-    Args:
-        channel_id: The Slack channel ID associated with the order
-        client: The Slack WebClient instance
-    """
-    # Get the current order information
-    order = get_order_info(channel_id)
-    if not order:
-        client.chat_postMessage(
-            channel=channel_id,
-            text="No active order", 
-            blocks=[{
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": (
-                            "⚠️ *No active order found in this channel*\n"
-                            "To start a new order submission, please go to the main channel and click 'Submit New Order'."
-                        )
-                    }
-                }]
-        )
-        return
-    
-    # Determine which field needs verification next
-    field, verification_flag = get_next_unverified_field(order)
-    
-    if not field:
-        # All fields verified - move to next stage
-        handle_stage_completion(order, client)
-        return
-    
-    # Get current value of the field
-    field_value = order.get(field)
-    
-    # Create the blocks payload correctly
-    blocks = [
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": (
-                    f"*{field.replace('_', ' ').title()}*: "
-                    f"{format_field_for_display(field, field_value)}\n"
-                    "Is this correct?"
-                )
-            }
-        },
-        {
-            "type": "actions",
-            "elements": [
-                create_button("✅ Yes", "verify_field_yes", f"{field}|{verification_flag}"),
-                create_button("✏️ No", "verify_field_no", field)
-            ]
-        }
-    ]
-    
-    client.chat_postMessage(
-        channel=channel_id,
-        text='Field verification prompt',
-        blocks=blocks
-    )
-
-def check_for_missing_info(channel_id, client):
-    """Check if any required fields are missing and prompt for them"""
-    order = get_order_info(channel_id)
-    if not order:
-        return client.chat_postMessage(
-            channel=channel_id, 
-            text = "Order not found"
-        )
-    
-    required_fields = [
-        ('restaurant_name', 'is_restaurant_name_verified'),
-        ('order_placement_time', 'is_order_placement_time_verified'),
-        ('earliest_estimated_arrival_time', 'is_earliest_estimated_arrival_time_verified'),
-        ('latest_estimated_arrival_time', 'is_latest_estimated_arrival_time_verified'),
-        ('order_completion_time', 'is_order_completion_time_verified')
-    ]
-    
-    missing_fields = [
-        field for field, flag in required_fields 
-        if not order.get(field) and not order.get(flag)
-    ]
-    
-    if missing_fields:
-        client.chat_postMessage(
-            channel=channel_id, 
-            text = "We're missing some information:"
-        )
-        for field in missing_fields:
-            send_input_prompt(channel_id, field, is_missing=True, client=client)
-    else:
-        # No missing info, complete the order
-        if update_order(channel_id, {'status': 'completed'}):
-            client.chat_postMessage(
-                channel=channel_id, 
-                text = "Thank you! Your order submission is complete.",
-                blocks = [
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": "Thank you for submitting your screenshots and verifying the times on those screenshots! Your order submission is now complete. You\'ve finished everything required on your end, and we\'ll take it from here."
-                            }
-                        }, 
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": "If you encounter a bug, typo, or other error at any point in the order submission process or other issues, feel free to fill out this <https://docs.google.com/forms/d/e/1FAIpQLSe7U05qgO7AUrkEcH4brPSnPAsvjgfcE3kEhOrg1b8ZoNPWdA/viewform?usp=sharing | form>!"
-                            }
-                        }
-                ]
-            )
 
 if __name__ == "__main__":
     # TODO? Figure out why team join doesnt work when app starts

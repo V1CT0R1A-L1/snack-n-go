@@ -24,7 +24,6 @@ def connectDB(DB_NAME):
     Returns a connection object to that database. This connection should eventually
         be closed with .close()
     """
-    # Connect to the database
     db = pymysql.connect(
         host='localhost',
         user='root', 

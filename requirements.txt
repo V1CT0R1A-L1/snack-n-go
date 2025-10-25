@@ -1,0 +1,13 @@
+python-dotenv
+pymysql
+flask
+requests
+slack_sdk
+slack_bolt
+cryptography
+pandas
+schedule
+google-genai
+Pillow
+pytesseract
+opencv-python
