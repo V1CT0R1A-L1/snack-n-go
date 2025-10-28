@@ -9,5 +9,5 @@ pandas
 schedule
 google-genai
 Pillow
-pytesseract
 opencv-python
+easyocr

@@ -14,15 +14,14 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
-from datetime import datetime
 from helper_functions import *
 from gemini import *
+from ocr import *
 import messenger
 import re
 import certifi
 from datetime import datetime
-from auto_verification import process_screenshot_with_auto_verify
-
+import time
 
 
 ## Load environment variables ##
@@ -123,8 +122,6 @@ def get_current_unix_time():
 
 def format_unix_time(timestamp, format_str="%Y-%m-%d %H:%M"):
     """Convert Unix timestamp to human-readable string"""
-    if timestamp is None:
-        return "[Not Provided]"
     return datetime.fromtimestamp(timestamp).strftime(format_str)
 
 def parse_human_time_to_unix(time_str):
@@ -223,12 +220,10 @@ def create_order_in_DB(user_id):
             conn.close()
 
 def get_next_unverified_field(order, skip_auto_verified=False):
-    """Determine which field to verify next - only returns fields with actual values"""
-    print(f"--- GET NEXT UNVERIFIED FIELD DEBUG ---")
-    print(f"Order ID: {order.get('order_id')}")
-    print(f"Skip auto-verified: {skip_auto_verified}")
-   
-    # Get auto-verified fields if skipping is enabled
+    """Get next field that needs manual verification"""
+    print(f"Looking for next unverified field in order {order.get('order_id')}")
+    
+    # Get auto-verified fields to skip
     auto_verified_fields = set()
     if skip_auto_verified:
         auto_verified_json = order.get('auto_verified_fields')
@@ -237,33 +232,37 @@ def get_next_unverified_field(order, skip_auto_verified=False):
                 auto_verified_fields = set(json.loads(auto_verified_json))
                 print(f"Auto-verified fields to skip: {auto_verified_fields}")
             except json.JSONDecodeError:
-                print("Failed to parse auto_verified_fields JSON")
-
+                pass
+    
+    # Check each field in order
     verification_order = [
         ('restaurant_name', 'is_restaurant_name_verified'),
-        ('order_placement_time', 'is_order_placement_time_verified'),
+        ('order_placement_time', 'is_order_placement_time_verified'), 
         ('earliest_estimated_arrival_time', 'is_earliest_estimated_arrival_time_verified'),
         ('latest_estimated_arrival_time', 'is_latest_estimated_arrival_time_verified'),
         ('order_completion_time', 'is_order_completion_time_verified'),
         ('restaurant_address', 'is_restaurant_address_verified')
     ]
-   
+    
     for field, verification_flag in verification_order:
-        if skip_auto_verified and field in auto_verified_fields:
+        # Skip if auto-verified
+        if field in auto_verified_fields:
             print(f"Skipping auto-verified field: {field}")
             continue
-           
+            
         field_value = order.get(field)
         is_verified = order.get(verification_flag, False)
-       
-        print(f"Checking field: {field}, value: {field_value}, verified: {is_verified}")
-       
+        
+        print(f"Checking {field}: value={field_value}, verified={is_verified}")
+        
+        # If field has a value but isn't verified yet
         if field_value is not None and not is_verified:
-            print(f"Found next field: {field}, verification_flag: {verification_flag}")
+            print(f"Found field needing verification: {field}")
             return field, verification_flag
-   
+    
     print("No unverified fields found")
     return None, None
+
 
 def format_field_for_display(field_name, value):
     """Convert field values to human-readable format"""
@@ -338,9 +337,79 @@ def send_input_prompt(channel_id, field, is_missing=False, client=None):
         )
     return blocks
 
+def process_screenshot_simplified(filepath, image_stage, order_id):
+    """
+    Simplified processing that compares OCR and Gemini results
+    Returns: dict with updates and auto_verified fields
+    """
+    print(f"[SIMPLIFIED PROCESSING] Starting for {image_stage}")
+    
+    # Get results from both OCR engines
+    ocr_result = ocr_process_image(filepath, image_stage)
+    gemini_result = gemini_process_image(filepath, image_stage)
+    
+    print(f"OCR Result: {ocr_result}")
+    print(f"Gemini Result: {gemini_result}")
+    
+    updates = {}
+    auto_verified_fields = []
+    
+    # Define fields to check based on stage
+    if image_stage == "awaiting_placement_time":
+        fields_to_check = [
+            'restaurant_name', 'restaurant_address',
+            'order_placement_time', 'earliest_estimated_arrival_time', 
+            'latest_estimated_arrival_time'
+        ]
+    else:  # awaiting_arrival_time
+        fields_to_check = ['order_completion_time']
+    
+    # Compare and auto-verify matching fields
+    for field in fields_to_check:
+        ocr_value = ocr_result.get(field)
+        gemini_value = gemini_result.get(field)
+        
+        print(f"Comparing {field}: OCR={ocr_value}, Gemini={gemini_value}")
+        
+        if ocr_value and gemini_value and ocr_value == gemini_value:
+            # Both agree - auto verify
+            updates[field] = gemini_value
+            updates[f'is_{field}_verified'] = True
+            auto_verified_fields.append(field)
+            print(f"✅ Auto-verified {field}: {ocr_value}")
+        elif ocr_value and not gemini_value:
+            # Only OCR has value - use it but require verification
+            updates[field] = ocr_value
+            print(f"📝 OCR found {field}, needs verification: {ocr_value}")
+        elif gemini_value and not ocr_value:
+            # Only Gemini has value - use it but require verification  
+            updates[field] = gemini_value
+            print(f"📝 Gemini found {field}, needs verification: {gemini_value}")
+        elif ocr_value and gemini_value and ocr_value != gemini_value:
+            # Conflict - use OCR value but require verification
+            updates[field] = gemini_value
+            print(f"⚠️  Conflict for {field}: OCR={ocr_value}, Gemini={gemini_value}")
+        else:
+            # Neither found value
+            print(f"❌ No value found for {field}")
+    
+    updates['auto_verified_fields'] = json.dumps(auto_verified_fields)
+    
+    result = {
+        'updates': updates,
+        'auto_verified_count': len(auto_verified_fields),
+        'total_fields': len(fields_to_check),
+        'needs_manual_verification': len(auto_verified_fields) < len(fields_to_check)
+    }
+    
+    print(f"Processing result: {result}")
+    return result
+
 def process_image(channel_id, file):
-    """Process uploaded image based on order stage"""
-    print(f"[IMAGE PROCESSING] Processing image in channel {channel_id}, File: {file['name']}", datetime.now())
+    """Simplified image processing workflow"""
+    print(f"[IMAGE PROCESSING] Processing image in channel {channel_id}")
+    
+    # File validation (keep existing)
     allowed_mimetypes = ["image/png", "image/jpeg", "image/jpg"]
     max_size_mb = 5
     
@@ -358,10 +427,10 @@ def process_image(channel_id, file):
         )
         return
 
+    # Get user_id from DM channel
     user_id = None
     try:
         channel_info = client.conversations_info(channel=channel_id)['channel']
-        
         if channel_info.get('is_im'):
             if 'user' in file: 
                 user_id = file['user'] 
@@ -369,167 +438,121 @@ def process_image(channel_id, file):
                 response = client.conversations_members(channel=channel_id)
                 members = response['members']
                 user_id = next((m for m in members if m != BOT_ID), None)
-            
-            if not user_id:
-                raise Exception("Could not find user_id from DM channel members.")
-
-        else:
-            raise Exception("Channel is not a DM (IM) channel.") 
-
     except Exception as e:
-        print(f"Error determining user_id from DM: {e}")
-        client.chat_postMessage(channel=channel_id, text="Error: Could not determine the active user.")
+        print(f"Error determining user_id: {e}")
+        client.chat_postMessage(channel=channel_id, text="Error: Could not determine user.")
         return
 
-    order = get_last_active_order_by_user(user_id) 
-
+    order = get_last_active_order_by_user(user_id)
     if not order:
-        client.chat_postMessage(
-            channel=channel_id,
-            text="No active order found for you. Please start a new submission."
-        )
+        client.chat_postMessage(channel=channel_id, text="No active order found.")
         return
     
     order_id = order['order_id']
     
     try:
-        # Get file info
+        # Download and save file
         file_info = client.files_info(file=file['id'])['file']
-        
-        # Download the file
         response = requests.get(
             file_info['url_private_download'],
             headers={'Authorization': f'Bearer {os.environ.get("SLACK_BOT_TOKEN")}'}
         )
         
         if response.status_code != 200:
-            raise Exception("Failed to download file from Slack")
+            raise Exception("Failed to download file")
         
         # Create filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         file_ext = file['name'].split('.')[-1] if '.' in file['name'] else 'jpg'
         
-        # Determine screenshot stage
+        # Determine stage
         if order['status'] == 'awaiting_initial_screenshot':
             stage = 'placement'
             image_stage = "awaiting_placement_time"
+            next_status = "verifying_initial_data"
         elif order['status'] == 'awaiting_completion_screenshot':
             stage = 'completion'
             image_stage = "awaiting_arrival_time"
+            next_status = "verifying_completion_data"
         else:
-            stage = 'other'
-            image_stage = "awaiting_placement_time"
+            client.chat_postMessage(channel=channel_id, text="Wrong stage for image upload.")
+            return
             
-        filename = f"order_{order['order_id']}_{stage}_{timestamp}.{file_ext}"
+        filename = f"order_{order_id}_{stage}_{timestamp}.{file_ext}"
         filepath = os.path.join(IMAGE_STORAGE_DIR, filename)
         
-        # Save the file
+        # Save file
         with open(filepath, 'wb') as f:
             f.write(response.content)
         
-        # Process the image
-        print(f"[AUTO_VERIFICATION] Starting auto-verification for order {order_id}")
-        result = process_screenshot_with_auto_verify(filepath, image_stage, order_id, db_operation)
-
+        # Process with new simplified logic
+        print(f"[PROCESSING] Starting simplified processing for {image_stage}")
+        result = process_screenshot_simplified(filepath, image_stage, order_id)
+        
+        # Update database
         if update_order_by_id(order_id, result['updates']):
-           
+            # Update status
+            update_order_by_id(order_id, {'status': next_status})
+            
+            # Handle results
             if not result['needs_manual_verification']:
-                # All fields auto-verified! Skip manual verification
-                print(f"[AUTO_VERIFICATION] All fields auto-verified for order {order_id}")
+                # All fields auto-verified!
                 client.chat_postMessage(
                     channel=channel_id,
-                    text="✅ All information automatically verified! Moving to next step.",
-                    blocks=[
-                        {
-                            "type": "section",
-                            "text": {
-                                "type": "mrkdwn",
-                                "text": f"✅ *Automatic Verification Complete!*\n\nAll {result['auto_verified_count']} fields were automatically verified. Moving to the next step."
-                            }
+                    text=f"✅ All {result['auto_verified_count']} fields auto-verified!",
+                    blocks=[{
+                        "type": "section", 
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"✅ *Automatic Verification Complete!*\n\nAll {result['auto_verified_count']} fields were automatically verified by both OCR and Gemini."
                         }
-                    ]
+                    }]
                 )
-                # Move to next stage directly
+                # Move to next stage
                 updated_order = get_last_active_order_by_user(user_id)
                 handle_stage_completion(updated_order, channel_id, client)
-               
             else:
                 # Some fields need manual verification
-                print(f"[AUTO_VERIFICATION] {result['auto_verified_count']}/{result['total_expected_fields']} fields auto-verified, need manual verification")
-               
-                if result['auto_verified_count'] > 0:
-                    # Show which fields were auto-verified
-                    auto_verified_fields = json.loads(result['updates'].get('auto_verified_fields', '[]'))
+                auto_verified_count = result['auto_verified_count']
+                total_fields = result['total_fields']
+                
+                if auto_verified_count > 0:
                     client.chat_postMessage(
                         channel=channel_id,
-                        text=f"✅ {result['auto_verified_count']} fields auto-verified, {result['total_expected_fields'] - result['auto_verified_count']} need manual confirmation",
-                        blocks=[
-                            {
-                                "type": "section",
-                                "text": {
-                                    "type": "mrkdwn",
-                                    "text": f"✅ *Partial Auto-Verification Complete!*\n\n{result['auto_verified_count']} out of {result['total_expected_fields']} fields were automatically verified. Please verify the remaining information."
-                                }
+                        text=f"✅ {auto_verified_count} fields auto-verified",
+                        blocks=[{
+                            "type": "section",
+                            "text": {
+                                "type": "mrkdwn", 
+                                "text": f"✅ *Partial Auto-Verification Complete!*\n\n{auto_verified_count} out of {total_fields} fields were automatically verified. Please verify the remaining information."
                             }
-                        ]
+                        }]
                     )
-               
-                # Start manual verification for remaining fields
+                
+                # Start manual verification
                 start_field_verification(order_id, channel_id, client)
             
     except Exception as e:
         error_msg = f"Error processing image: {str(e)}"
         print(error_msg)
-        client.chat_postMessage(
-            channel=channel_id,
-            text=error_msg
-        )
+        client.chat_postMessage(channel=channel_id, text=error_msg)
 
 def start_field_verification(order_id, channel_id, client):
-    # Get the current order information
+    """Start manual verification for remaining fields"""
     order = db_operation("SELECT * FROM orders WHERE order_id = %s", (order_id,), fetch_one=True)
-
-    print(f"[FIELD VERIFICATION] Starting verification for order {order_id}")
-    print(f"Order status: {order.get('status')}")
-   
-
+    
     if not order:
-        client.chat_postMessage(
-            channel=channel_id,
-            text="No active order", 
-            blocks=[{
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": (
-                            "No active order in this channel"
-                        )
-                    }
-                }]
-        )
+        client.chat_postMessage(channel=channel_id, text="No active order")
         return
     
-    # Check if there are auto-verified fields
-    auto_verified_json = order.get('auto_verified_fields')
-    auto_verified_fields = json.loads(auto_verified_json) if auto_verified_json else []
-   
-    if auto_verified_fields:
-        print(f"[FIELD VERIFICATION] Auto-verified fields: {auto_verified_fields}")
-   
-    # Determine which field needs verification next (skip auto-verified ones)
     field, verification_flag = get_next_unverified_field(order, skip_auto_verified=True)
-    print(f"Next field to verify: {field}, Verification flag: {verification_flag}")
-   
+    
     if not field:
-        # All fields verified - move to next stage
-        print(f"[FIELD VERIFICATION] All fields verified for order {order_id}")
         handle_stage_completion(order, channel_id, client)
         return
-   
-    # Get current value of the field
+    
     field_value = order.get(field)
-    print(f"Field value: {field_value}, Type: {type(field_value)}")
-
+    
     blocks = [
         {
             "type": "section",
@@ -553,7 +576,7 @@ def start_field_verification(order_id, channel_id, client):
                     "style": "primary"
                 },
                 {
-                    "type": "button",
+                    "type": "button", 
                     "text": {"type": "plain_text", "text": "✏️ No"},
                     "action_id": "verify_field_no",
                     "value": field
@@ -561,13 +584,13 @@ def start_field_verification(order_id, channel_id, client):
             ]
         }
     ]
-   
-    # Send verification prompt
+    
     client.chat_postMessage(
         channel=channel_id,
         text=f'Verification prompt for {field}',
         blocks=blocks
     )
+
 
 def handle_stage_completion(order, channel_id, client):
     """
@@ -757,6 +780,29 @@ def send_welcome_message(users_list) -> None:
             except SlackApiError as e:
                 assert e.response["ok"] is False and e.response["error"], f"Got an error: {e.response['error']}"
 
+def reject_all_pending_orders(user_id):
+    """Reject all pending orders for a user"""
+    try:
+        result = db_operation(
+            """UPDATE orders 
+               SET status = 'rejected' 
+               WHERE user_id = %s 
+               AND status NOT IN ('completed', 'rejected')""",
+            (user_id,)
+        )
+        
+        rejected_count = db_operation(
+            "SELECT ROW_COUNT() as count",
+            fetch_one=True
+        )['count'] if result else 0
+        
+        print(f"[ORDER CLEANUP] Rejected {rejected_count} pending orders for user {user_id}")
+        return rejected_count
+        
+    except Exception as e:
+        print(f"Error rejecting pending orders: {e}")
+        return 0
+
 ### MESSAGE HANDLERS ###
 @app.event("file_created")
 def handle_file_created_events(body, logger):
@@ -781,16 +827,25 @@ def handle_message(payload, say):
     print(f"[USER MESSAGE] Message from {user_id}: {text}", datetime.now())
     if text in ["help", "?"]:
         print(f"[HELP REQUEST] User {user_id} requested help", datetime.now())
-        say(text="Here's how I can help you!",
+        rejected_count = reject_all_pending_orders(user_id)
+        
+        # Show help message with cleanup info
+        if rejected_count > 0:
+            help_message = f"✅ Cleaned up {rejected_count} pending order(s). Here's how I can help you!"
+        else:
+            help_message = "Here's how I can help you!"
+            
+        say(text=help_message,
             blocks=MESSAGE_BLOCKS["main_channel_welcome_message"]['blocks'])
         return
+    
     if 'files' in payload:
         if text == '': 
             print("[FILE UPLOAD] Detected file with empty message text. Skipping to avoid duplication.")
             return
         return
-    else:
-        say()
+    
+    return
 
 @app.action("process_input")
 def handle_user_input(ack, body, say, logger, client):
@@ -906,6 +961,8 @@ def handle_start_order_submission(ack, body, say):
     """Start new order submission flow"""
     ack()
     user_id = body["user"]["id"]
+    rejected_count = reject_all_pending_orders(user_id)
+
     order_id = create_order_in_DB(user_id)
     print(f"[ORDER STARTED] User {user_id} started new order submission at {datetime.now()}") 
 
@@ -919,11 +976,15 @@ def handle_start_order_submission(ack, body, say):
             say("Failed to start order submission due to a Slack issue.") 
             return
         
+        cleanup_text = ""
+        if rejected_count > 0:
+            cleanup_text = f"\n\n✅ Cleaned up {rejected_count} pending order(s) before starting new submission."
+        
         client.chat_postMessage(
             channel=channel_to_post,
-            text=f"You've started an order submission! Send 'help' or '?' to end submission.",
+            text=f"You've started an order submission! Send 'help' or '?' to end submission.{cleanup_text}",
         )
-        
+
         client.chat_postMessage(
             channel=channel_to_post,
             text = 'Which of the following delivery apps do you use?', 
@@ -1114,35 +1175,30 @@ def handle_check_account_status(ack, body, say):
                 fetch_one=True
             )['COUNT(*)']
             
-            # Get the most recent orders for history
+            # Get the most recent orders for history - USE start_submission_timestamp instead of channel_creation_time
             recent_orders = db_operation(
-                """SELECT order_id, restaurant_name, status, channel_creation_time 
+                """SELECT order_id, restaurant_name, status, start_submission_timestamp 
                 FROM orders WHERE user_id = %s 
-                ORDER BY channel_creation_time DESC LIMIT 5""",
+                ORDER BY start_submission_timestamp DESC LIMIT 5""",
                 (user_id,),
-                fetch_one=False
+                fetch_all=True  # Changed to fetch_all to get multiple records
             )
             
             # Format recent orders for display
             orders_history = "\n".join(
-                [f"- Order #{o['order_id']}: {o['restaurant_name']} ({o['status']})" 
-                 for o in recent_orders]
+                [f"- Order #{o['order_id']}: {o['restaurant_name'] or 'No name'} ({o['status']})" 
+                 for o in (recent_orders or [])]
             ) if recent_orders else "No recent orders"
 
-            compensation_type = user_data['compensation_category']
-            if compensation_type == 'staged_raffle':
-                explanation_link = "<https://docs.google.com/document/d/1sip1ct22LFrP4dXjwdH0j_A7hBjtvsFUCwKPhRTvS8w/edit?usp=sharing | What does this mean?>"
-            elif compensation_type == 'submission_count':
-                explanation_link = "<https://docs.google.com/document/d/1Cri52reeZ2jFT0YkGvPEu04LvAQYYFd8dNCzD2tvNnc/edit?usp=sharing | What does this mean?>"
-            else:
-                explanation_link = ""
+            # Simple compensation message based on completed orders
+            compensation_info = f"Compensation based on completed orders: {completed_orders} completed"
             
             # Format the message
             message = f"""
-                *Your Account Status:*
-- Username: {user_data['username']}
+*Your Account Status:*
+- Username: {user_data['username'] or 'Not set'}
 - Account Status: {user_data['status'].capitalize()}
-- Compensation Type: {compensation_type.replace('_', ' ').title()} {explanation_link}
+- {compensation_info}
 
 *Order Statistics:*
 - Total orders: {total_orders}
@@ -1156,11 +1212,12 @@ def handle_check_account_status(ack, body, say):
             
             client.chat_postMessage(channel=channel_id, text=message.strip())
         else:
-            say("No account information found. ")
+            client.chat_postMessage(channel=channel_id, text="No account information found. Please contact support.")
             
     except Exception as e:
-        client.chat_postMessage(channel=channel_id, text="No account information found.")
-        print(f"Error getting account status: {e}")
+        error_msg = f"Error getting account status: {e}"
+        print(error_msg)
+        client.chat_postMessage(channel=channel_id, text="Sorry, there was an error retrieving your account information.")
 
 if __name__ == "__main__":
     # TODO? Figure out why team join doesnt work when app starts

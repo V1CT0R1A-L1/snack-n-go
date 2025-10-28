@@ -13,38 +13,18 @@ DROP TABLE IF EXISTS `users`;
 DROP TABLE IF EXISTS `orders`;
 
 CREATE TABLE IF NOT EXISTS users (
-    id VARCHAR(50) PRIMARY KEY, -- randomly generated
+    id VARCHAR(50) PRIMARY KEY,
     username VARCHAR(50),
     email VARCHAR(50),
-    status ENUM('active', 'inactive') DEFAULT 'active',
-    compensation_category ENUM('staged_raffle', 'submission_count'),
-    user_number INT AUTO_INCREMENT UNIQUE -- for odd/even determination
+    status ENUM('active', 'inactive') DEFAULT 'active'
 )
 ENGINE = InnoDB;
-
-DELIMITER //
-CREATE TRIGGER set_comp_category
-BEFORE INSERT ON users
-FOR EACH ROW
-BEGIN
-    DECLARE next_num INT;
-    
-    -- Get the next auto-increment value
-    SELECT AUTO_INCREMENT INTO next_num
-    FROM information_schema.TABLES
-    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users';
-    
-    -- Set category based on odd/even
-    SET NEW.compensation_category = IF(next_num % 2 = 1, 'staged_raffle', 'submission_count');
-END//
-DELIMITER ;
 
 CREATE TABLE IF NOT EXISTS orders (
     -- Order info
     order_id INT AUTO_INCREMENT,
     user_id VARCHAR(50),
     start_submission_timestamp INT,
-    end_submission_timestamp INT,
     app_used VARCHAR(20),
     status ENUM(
         'awaiting_app_selection',
@@ -77,22 +57,9 @@ CREATE TABLE IF NOT EXISTS orders (
     placement_screenshot_path VARCHAR(300),
     completion_screenshot_path VARCHAR(300),
 
-    -- Auto-verification variables
-    gemini_restaurant_name VARCHAR(100),
-    gemini_order_placement_time INT,
-    gemini_earliest_estimated_arrival_time INT,
-    gemini_latest_estimated_arrival_time INT,
-    gemini_order_completion_time INT,
-    gemini_restaurant_address VARCHAR(100),
-   
-    ocr_restaurant_name VARCHAR(100),
-    ocr_order_placement_time INT,
-    ocr_earliest_estimated_arrival_time INT,
-    ocr_latest_estimated_arrival_time INT,
-    ocr_order_completion_time INT,
-    ocr_restaurant_address VARCHAR(100),
-   
+    -- Auto-verification
     auto_verified_fields JSON,
+    
     PRIMARY KEY (order_id),
     FOREIGN KEY (user_id) REFERENCES users(id) ON UPDATE CASCADE ON DELETE SET NULL
 )

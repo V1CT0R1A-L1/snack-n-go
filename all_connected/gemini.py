@@ -333,11 +333,13 @@ if __name__ == "__main__":
     ss_dir = Path(__file__).parent.parent / "ss"
     image_file = ss_dir / "uber-orderplacement.png"  # uber order placement
     image_file2 = ss_dir / "uber-ordercomplete.png"  # uber order completion
-    image_file3 = ss_dir / "dd-ordercomplete.png"  # doordash order completion
+    image_file3 = ss_dir / "dd-orderplacement.png"  # doordash order placement
+    image_file4 = ss_dir / "dd-ordercomplete.png"  # doordash order completion
 
     # info = process_image(image_file, "order-placement", "uber")
     # info = process_image(image_file2, "order-completion", "uber")
-    info = gemini_process_image(image_file, "awaiting_arrival_time") 
+    # info = gemini_process_image(image_file3, "awaiting_placement_time") 
+    info = gemini_process_image(image_file4, "awaiting_arrival_time") 
 
     if info:
         print(f"Gemini extracted :\n{info}")
