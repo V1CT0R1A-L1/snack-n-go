@@ -221,7 +221,7 @@ def create_order_in_DB(user_id):
 
 def get_next_unverified_field(order, skip_auto_verified=False):
     """Get next field that needs manual verification"""
-    print(f"Looking for next unverified field in order {order.get('order_id')}")
+    # print(f"Looking for next unverified field in order {order.get('order_id')}")
     
     # Get auto-verified fields to skip
     auto_verified_fields = set()
@@ -247,20 +247,20 @@ def get_next_unverified_field(order, skip_auto_verified=False):
     for field, verification_flag in verification_order:
         # Skip if auto-verified
         if field in auto_verified_fields:
-            print(f"Skipping auto-verified field: {field}")
+            # print(f"Skipping auto-verified field: {field}")
             continue
             
         field_value = order.get(field)
         is_verified = order.get(verification_flag, False)
         
-        print(f"Checking {field}: value={field_value}, verified={is_verified}")
+        # print(f"Checking {field}: value={field_value}, verified={is_verified}")
         
         # If field has a value but isn't verified yet
         if field_value is not None and not is_verified:
-            print(f"Found field needing verification: {field}")
+            # print(f"Found field needing verification: {field}")
             return field, verification_flag
     
-    print("No unverified fields found")
+    # print("No unverified fields found")
     return None, None
 
 
@@ -369,29 +369,30 @@ def process_screenshot_simplified(filepath, image_stage, order_id):
         ocr_value = ocr_result.get(field)
         gemini_value = gemini_result.get(field)
         
-        print(f"Comparing {field}: OCR={ocr_value}, Gemini={gemini_value}")
+        # print(f"Comparing {field}: OCR={ocr_value}, Gemini={gemini_value}")
         
         if ocr_value and gemini_value and ocr_value == gemini_value:
             # Both agree - auto verify
             updates[field] = gemini_value
             updates[f'is_{field}_verified'] = True
             auto_verified_fields.append(field)
-            print(f"✅ Auto-verified {field}: {ocr_value}")
+            # print(f"✅ Auto-verified {field}: {ocr_value}")
         elif ocr_value and not gemini_value:
             # Only OCR has value - use it but require verification
             updates[field] = ocr_value
-            print(f"📝 OCR found {field}, needs verification: {ocr_value}")
+            # print(f"📝 OCR found {field}, needs verification: {ocr_value}")
         elif gemini_value and not ocr_value:
             # Only Gemini has value - use it but require verification  
             updates[field] = gemini_value
-            print(f"📝 Gemini found {field}, needs verification: {gemini_value}")
+            # print(f"📝 Gemini found {field}, needs verification: {gemini_value}")
         elif ocr_value and gemini_value and ocr_value != gemini_value:
             # Conflict - use OCR value but require verification
             updates[field] = gemini_value
-            print(f"⚠️  Conflict for {field}: OCR={ocr_value}, Gemini={gemini_value}")
+            # print(f"⚠️  Conflict for {field}: OCR={ocr_value}, Gemini={gemini_value}")
         else:
             # Neither found value
-            print(f"❌ No value found for {field}")
+            # print(f"❌ No value found for {field}")
+            continue
     
     updates['auto_verified_fields'] = json.dumps(auto_verified_fields)
     

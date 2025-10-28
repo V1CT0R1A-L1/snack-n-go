@@ -76,7 +76,7 @@ def extract_times_with_positions(ocr_results, full_text):
         matches = re.findall(pattern, full_text, re.IGNORECASE)
         all_time_strings.extend(matches)
     
-    print(f"All time strings found: {all_time_strings}")
+    # print(f"All time strings found: {all_time_strings}")
     
     # For each OCR result, check if it contains times and record position
     for bbox, text, confidence in ocr_results:
@@ -95,7 +95,7 @@ def extract_times_with_positions(ocr_results, full_text):
                 all_time_strings.remove(time_str)
                 break
     
-    print(f"Unique times with positions: {[(t['time_str'], t['center_x'], t['center_y']) for t in times]}")
+    # print(f"Unique times with positions: {[(t['time_str'], t['center_x'], t['center_y']) for t in times]}")
     return times
 
 def extract_placement_times(times_with_positions, full_text, image_shape):
@@ -109,11 +109,11 @@ def extract_placement_times(times_with_positions, full_text, image_shape):
     }
     
     if not times_with_positions:
-        print("No times found in image")
+        # print("No times found in image")
         return result
     
     height, width = image_shape[:2]
-    print(f"Image dimensions: {width}x{height}")
+    # print(f"Image dimensions: {width}x{height}")
     
     # Strategy 1: Find AM/PM context from delivery times
     am_pm_context = None
@@ -126,7 +126,7 @@ def extract_placement_times(times_with_positions, full_text, image_shape):
             am_pm_context = "AM"
             break
     
-    print(f"Detected AM/PM context: {am_pm_context}")
+    # print(f"Detected AM/PM context: {am_pm_context}")
     
     # Strategy 2: Find top-left corner time (likely placement time)
     top_left_times = []
@@ -134,7 +134,7 @@ def extract_placement_times(times_with_positions, full_text, image_shape):
         # Consider top-left quadrant (first 20% of screen)
         if time_data['center_x'] < width * 0.2 and time_data['center_y'] < height * 0.2:
             top_left_times.append(time_data)
-            print(f"Found top-left time: {time_data['time_str']} at ({time_data['center_x']}, {time_data['center_y']})")
+            # print(f"Found top-left time: {time_data['time_str']} at ({time_data['center_x']}, {time_data['center_y']})")
     
     if top_left_times:
         # Pick the most top-left time (highest and leftmost)
@@ -146,7 +146,7 @@ def extract_placement_times(times_with_positions, full_text, image_shape):
             placement_time_data['time_str'], 
             am_pm_context=am_pm_context
         )
-        print(f"Selected placement time from top-left: {placement_time_data['time_str']}")
+        # print(f"Selected placement time from top-left: {placement_time_data['time_str']}")
     
     # Strategy 3: Look for delivery time patterns in text
     delivery_patterns = [
@@ -165,7 +165,7 @@ def extract_placement_times(times_with_positions, full_text, image_shape):
         matches = re.findall(pattern, full_text, re.IGNORECASE)
         if matches:
             time_str = matches[0]
-            print(f"Found delivery time with pattern '{pattern}': {time_str}")
+            # print(f"Found delivery time with pattern '{pattern}': {time_str}")
             if 'latest' in pattern.lower() or 'by' in pattern.lower():
                 latest_time = time_str
             else:
@@ -176,7 +176,7 @@ def extract_placement_times(times_with_positions, full_text, image_shape):
         time_range = find_time_range(full_text)
         if time_range:
             earliest_time, latest_time = time_range
-            print(f"Found time range: {earliest_time} - {latest_time}")
+            # print(f"Found time range: {earliest_time} - {latest_time}")
     
     # Strategy 5: Fallback - use remaining times by position
     remaining_times = [t for t in times_with_positions 
@@ -188,11 +188,11 @@ def extract_placement_times(times_with_positions, full_text, image_shape):
     
     if earliest_time is None and len(remaining_times) >= 1:
         earliest_time = remaining_times[0]['time_str']
-        print(f"Using earliest time from position: {earliest_time}")
+        # print(f"Using earliest time from position: {earliest_time}")
     
     if latest_time is None and len(remaining_times) >= 2:
         latest_time = remaining_times[1]['time_str']
-        print(f"Using latest time from position: {latest_time}")
+        # print(f"Using latest time from position: {latest_time}")
     
     # Convert to timestamps
     if earliest_time:
